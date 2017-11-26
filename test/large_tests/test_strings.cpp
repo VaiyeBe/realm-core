@@ -1,3 +1,21 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include <realm/column.hpp>
 
 #include "../util/number_names.hpp"
@@ -51,7 +69,7 @@ std::string randstring(Random& random)
     size_t len = random.draw_int_mod(10) * 100 + 1;
     std::string s;
     while (s.length() < len)
-        s += number_name(t);
+        s += number_name(static_cast<size_t>(t));
 
     s = s.substr(0, len);
     return s;
@@ -66,33 +84,36 @@ TEST_IF(Strings_Monkey2, TEST_DURATION >= 1)
     int seed = 123;
 
     VerifiedString a;
-    ref_type res_ref = Column::create(Allocator::get_default());
-    Column res(Allocator::get_default(), res_ref);
+    ref_type res_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn res(Allocator::get_default(), res_ref);
 
     Random random(seed);
     int trend = 5;
 
     for (size_t iter = 0; iter < ITER; iter++) {
 
-//        if (random.chance(1, 10))
-//            std::cout << "Input bitwidth around ~"<<current_bitwidth<<", , a.Size()="<<a.size()<<"\n";
+        //        if (random.chance(1, 10))
+        //            std::cout << "Input bitwidth around ~"<<current_bitwidth<<", , a.Size()="<<a.size()<<"\n";
 
         if (random.draw_int_mod(ITER / 100) == 0) {
             trend = random.draw_int_mod(10);
-
-            a.find_first(randstring(random));
-            a.find_all(res, randstring(random));
+            std::string rand1(randstring(random));
+            std::string rand2(randstring(random));
+            a.find_first(rand1);
+            a.find_all(res, rand2);
         }
 
         if (random.draw_int_mod(10) > trend && a.size() < ITER / 100) {
             if (random.draw_bool()) {
                 // Insert
                 size_t pos = random.draw_int_max(a.size());
-                a.insert(pos, randstring(random));
+                std::string rstr(randstring(random));
+                a.insert(pos, rstr);
             }
             else {
                 // Add
-                a.add(randstring(random));
+                std::string rstr(randstring(random));
+                a.add(rstr);
             }
         }
         else if (a.size() > 0) {

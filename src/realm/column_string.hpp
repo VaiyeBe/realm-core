@@ -1,23 +1,21 @@
-
 /*************************************************************************
  *
- * REALM CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] Realm Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of Realm Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to Realm Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from Realm Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
+
 #ifndef REALM_COLUMN_STRING_HPP
 #define REALM_COLUMN_STRING_HPP
 
@@ -34,7 +32,7 @@ namespace realm {
 class StringIndex;
 
 
-/// A string column (AdaptiveStringColumn) is a single B+-tree, and
+/// A string column (StringColumn) is a single B+-tree, and
 /// the root of the column is the root of the B+-tree. Leaf nodes are
 /// either of type ArrayString (array of small strings),
 /// ArrayStringLong (array of medium strings), or ArrayBigBlobs (array
@@ -44,32 +42,35 @@ class StringIndex;
 /// it is, then the root ref of the index is stored in
 /// Table::m_columns immediately after the root ref of the string
 /// column.
-///
-/// FIXME: Rename AdaptiveStringColumn to StringColumn
-class AdaptiveStringColumn: public ColumnBaseSimple, public ColumnTemplate<StringData> {
+class StringColumn : public ColumnBaseSimple {
 public:
     typedef StringData value_type;
 
-    AdaptiveStringColumn(Allocator&, ref_type, bool nullable = false);
-    ~AdaptiveStringColumn() REALM_NOEXCEPT override;
+    StringColumn(Allocator&, ref_type, bool nullable = false, size_t column_ndx = npos);
+    ~StringColumn() noexcept override;
 
-    void destroy() REALM_NOEXCEPT override;
+    void destroy() noexcept override;
 
-    std::size_t size() const REALM_NOEXCEPT final;
-    bool is_empty() const REALM_NOEXCEPT { return size() == 0; }
+    size_t size() const noexcept final;
+    bool is_empty() const noexcept
+    {
+        return size() == 0;
+    }
 
-    bool is_null(std::size_t ndx) const REALM_NOEXCEPT;
-    void set_null(std::size_t ndx);
-    StringData get(std::size_t ndx) const REALM_NOEXCEPT;
-    void set(std::size_t ndx, StringData);
+    bool is_null(size_t ndx) const noexcept final;
+    void set_null(size_t ndx) final;
+    StringData get(size_t ndx) const noexcept;
+    void set(size_t ndx, StringData);
     void add();
     void add(StringData value);
-    void insert(std::size_t ndx);
-    void insert(std::size_t ndx, StringData value);
-    void erase(std::size_t row_ndx);
-    void move_last_over(std::size_t row_ndx);
+    void insert(size_t ndx);
+    void insert(size_t ndx, StringData value);
+    void erase(size_t row_ndx);
+    void move_last_over(size_t row_ndx);
+    void swap_rows(size_t row_ndx_1, size_t row_ndx_2) override;
     void clear();
 
+<<<<<<< HEAD
     std::size_t count(StringData value) const;
     std::size_t find_first(StringData value, std::size_t begin = 0,
                            std::size_t end = npos) const;
@@ -77,24 +78,29 @@ public:
                   std::size_t end = npos) const;
     
     void find_all_fulltext(Column& result, StringData value) const;
+=======
+    size_t count(StringData value) const;
+    size_t find_first(StringData value, size_t begin = 0, size_t end = npos) const;
+    void find_all(IntegerColumn& result, StringData value, size_t begin = 0, size_t end = npos) const;
+    FindRes find_all_no_copy(StringData value, InternalFindResult& result) const;
+>>>>>>> refs/remotes/realm/master
 
-    int compare_values(std::size_t, std::size_t) const override;
+    int compare_values(size_t, size_t) const noexcept override;
 
     //@{
     /// Find the lower/upper bound for the specified value assuming
     /// that the elements are already sorted in ascending order
     /// according to StringData::operator<().
-    std::size_t lower_bound_string(StringData value) const REALM_NOEXCEPT;
-    std::size_t upper_bound_string(StringData value) const REALM_NOEXCEPT;
+    size_t lower_bound_string(StringData value) const noexcept;
+    size_t upper_bound_string(StringData value) const noexcept;
     //@}
 
-    void set_string(std::size_t, StringData) override;
+    void set_string(size_t, StringData) override;
 
-    FindRes find_all_indexref(StringData value, std::size_t& dst) const;
-
-    bool is_nullable() const;
+    bool is_nullable() const noexcept final;
 
     // Search index
+<<<<<<< HEAD
     StringData get_index_data(std::size_t ndx, char* buffer) const REALM_NOEXCEPT final;
     bool has_search_index() const REALM_NOEXCEPT override;
     void set_search_index_ref(ref_type, ArrayParent*, std::size_t, bool) override;
@@ -103,23 +109,38 @@ public:
     StringIndex* get_search_index() REALM_NOEXCEPT override;
     const StringIndex* get_search_index() const REALM_NOEXCEPT override;
     std::unique_ptr<StringIndex> release_search_index() REALM_NOEXCEPT;
+=======
+    StringData get_index_data(size_t ndx, StringIndex::StringConversionBuffer& buffer) const noexcept final;
+    bool has_search_index() const noexcept override;
+    void set_search_index_ref(ref_type, ArrayParent*, size_t) override;
+    StringIndex* get_search_index() noexcept override;
+    const StringIndex* get_search_index() const noexcept override;
+    std::unique_ptr<StringIndex> release_search_index() noexcept;
+    bool supports_search_index() const noexcept final
+    {
+        return true;
+    }
+>>>>>>> refs/remotes/realm/master
     StringIndex* create_search_index() override;
 
     // Simply inserts all column values in the index in a loop
     void populate_search_index();
+<<<<<<< HEAD
     void destroy_search_index() REALM_NOEXCEPT override;
     
     // Full-text index
     StringIndex* create_fulltext_index();
     bool has_fulltext_index() const;
+=======
+    void destroy_search_index() noexcept override;
+>>>>>>> refs/remotes/realm/master
 
-    // Optimizing data layout
     // Optimizing data layout. enforce == true will enforce enumeration;
     // enforce == false will auto-evaluate if it should be enumerated or not
     bool auto_enumerate(ref_type& keys, ref_type& values, bool enforce = false) const;
 
     /// Compare two string columns for equality.
-    bool compare_string(const AdaptiveStringColumn&) const;
+    bool compare_string(const StringColumn&) const;
 
     enum LeafType {
         leaf_type_Small,  ///< ArrayString
@@ -127,50 +148,41 @@ public:
         leaf_type_Big     ///< ArrayBigBlobs
     };
 
-    std::unique_ptr<const ArrayParent> get_leaf(std::size_t ndx, std::size_t& out_ndx_in_parent,
-                      LeafType& out_leaf_type) const;
+    std::unique_ptr<const ArrayParent> get_leaf(size_t ndx, size_t& out_ndx_in_parent, LeafType& out_leaf_type) const;
 
-    static ref_type create(Allocator&, std::size_t size = 0);
+    static ref_type create(Allocator&, size_t size = 0);
 
-    static std::size_t get_size_from_ref(ref_type root_ref, Allocator&) REALM_NOEXCEPT;
+    static size_t get_size_from_ref(ref_type root_ref, Allocator&) noexcept;
 
     // Overrriding method in ColumnBase
-    ref_type write(std::size_t, std::size_t, std::size_t,
-                   _impl::OutputStream&) const override;
+    ref_type write(size_t, size_t, size_t, _impl::OutputStream&) const override;
 
-    bool is_string_col() const REALM_NOEXCEPT override;
+    void insert_rows(size_t, size_t, size_t, bool) override;
+    void erase_rows(size_t, size_t, size_t, bool) override;
+    void move_last_row_over(size_t, size_t, bool) override;
+    void clear(size_t, bool) override;
+    void set_ndx_in_parent(size_t ndx_in_parent) noexcept override;
+    void update_from_parent(size_t old_baseline) noexcept override;
+    void refresh_accessor_tree(size_t, const Spec&) override;
 
-    void insert(std::size_t, std::size_t, bool) override;
-    void erase(std::size_t, bool) override;
-    void move_last_over(std::size_t, std::size_t, bool) override;
-    void clear(std::size_t, bool) override;
-    void update_from_parent(std::size_t old_baseline) REALM_NOEXCEPT override;
-    void refresh_accessor_tree(std::size_t, const Spec&) override;
-
-#ifdef REALM_DEBUG
-    void Verify() const override;
-    void Verify(const Table&, std::size_t) const override;
+    void verify() const override;
+    void verify(const Table&, size_t) const override;
     void to_dot(std::ostream&, StringData title) const override;
     void do_dump_node_structure(std::ostream&, int) const override;
-#endif
-
-protected:
-    StringData get_val(std::size_t row) const override { return get(row); }
 
 private:
     std::unique_ptr<StringIndex> m_search_index;
     bool m_fulltext_index;
     bool m_nullable;
 
-    LeafType GetBlock(std::size_t ndx, ArrayParent**, std::size_t& off,
-                      bool use_retval = false) const;
+    LeafType get_block(size_t ndx, ArrayParent**, size_t& off, bool use_retval = false) const;
 
     /// If you are appending and have the size of the column readily available,
     /// call the 4 argument version instead. If you are not appending, either
     /// one is fine.
     ///
     /// \param row_ndx Must be `realm::npos` if appending.
-    void do_insert(std::size_t row_ndx, StringData value, std::size_t num_rows);
+    void do_insert(size_t row_ndx, StringData value, size_t num_rows);
 
     /// If you are appending and you do not have the size of the column readily
     /// available, call the 3 argument version instead. If you are not
@@ -178,47 +190,41 @@ private:
     ///
     /// \param is_append Must be true if, and only if `row_ndx` is equal to the
     /// size of the column (before insertion).
-    void do_insert(std::size_t row_ndx, StringData value, std::size_t num_rows, bool is_append);
+    void do_insert(size_t row_ndx, StringData value, size_t num_rows, bool is_append);
 
     /// \param row_ndx Must be `realm::npos` if appending.
-    void bptree_insert(std::size_t row_ndx, StringData value, std::size_t num_rows);
+    void bptree_insert(size_t row_ndx, StringData value, size_t num_rows);
 
     // Called by Array::bptree_insert().
-    static ref_type leaf_insert(MemRef leaf_mem, ArrayParent&, std::size_t ndx_in_parent,
-                                Allocator&, std::size_t insert_ndx,
-                                Array::TreeInsert<AdaptiveStringColumn>& state);
+    static ref_type leaf_insert(MemRef leaf_mem, ArrayParent&, size_t ndx_in_parent, Allocator&, size_t insert_ndx,
+                                BpTreeNode::TreeInsert<StringColumn>& state);
 
     class EraseLeafElem;
     class CreateHandler;
     class SliceHandler;
 
-    void do_erase(std::size_t row_ndx, bool is_last);
-    void do_move_last_over(std::size_t row_ndx, std::size_t last_row_ndx);
+    void do_erase(size_t row_ndx, bool is_last);
+    void do_move_last_over(size_t row_ndx, size_t last_row_ndx);
+    void do_swap_rows(size_t row_ndx_1, size_t row_ndx_2);
     void do_clear();
 
     /// Root must be a leaf. Upgrades the root leaf as
     /// necessary. Returns the type of the root leaf as it is upon
     /// return.
-    LeafType upgrade_root_leaf(std::size_t value_size);
+    LeafType upgrade_root_leaf(size_t value_size);
 
     void refresh_root_accessor();
 
-#ifdef REALM_DEBUG
-    void leaf_to_dot(MemRef, ArrayParent*, std::size_t ndx_in_parent,
-                     std::ostream&) const override;
-#endif
+    void leaf_to_dot(MemRef, ArrayParent*, size_t ndx_in_parent, std::ostream&) const override;
 
-    friend class Array;
+    friend class BpTreeNode;
     friend class ColumnBase;
 };
 
 
-
-
-
 // Implementation:
 
-inline std::size_t AdaptiveStringColumn::size() const REALM_NOEXCEPT
+inline size_t StringColumn::size() const noexcept
 {
     if (root_is_leaf()) {
         bool long_strings = m_array->has_refs();
@@ -238,56 +244,62 @@ inline std::size_t AdaptiveStringColumn::size() const REALM_NOEXCEPT
         return leaf->size();
     }
     // Non-leaf root
-    return m_array->get_bptree_size();
+    BpTreeNode* node = static_cast<BpTreeNode*>(m_array.get());
+    return node->get_bptree_size();
 }
 
-inline void AdaptiveStringColumn::add(StringData value)
+inline void StringColumn::add(StringData value)
 {
     REALM_ASSERT(!(value.is_null() && !m_nullable));
-    std::size_t row_ndx = realm::npos;
-    std::size_t num_rows = 1;
+    size_t row_ndx = realm::npos;
+    size_t num_rows = 1;
     do_insert(row_ndx, value, num_rows); // Throws
 }
 
-inline void AdaptiveStringColumn::add()
+inline void StringColumn::add()
 {
     add(m_nullable ? realm::null() : StringData(""));
 }
 
-inline void AdaptiveStringColumn::insert(std::size_t row_ndx, StringData value)
+inline void StringColumn::insert(size_t row_ndx, StringData value)
 {
     REALM_ASSERT(!(value.is_null() && !m_nullable));
-    std::size_t size = this->size();
-    REALM_ASSERT_3(row_ndx, <=, size);
-    std::size_t num_rows = 1;
-    bool is_append = row_ndx == size;
+    size_t column_size = this->size();
+    REALM_ASSERT_3(row_ndx, <=, column_size);
+    size_t num_rows = 1;
+    bool is_append = row_ndx == column_size;
     do_insert(row_ndx, value, num_rows, is_append); // Throws
 }
 
-inline void AdaptiveStringColumn::insert(std::size_t row_ndx)
+inline void StringColumn::insert(size_t row_ndx)
 {
     insert(row_ndx, m_nullable ? realm::null() : StringData(""));
 }
 
-inline void AdaptiveStringColumn::erase(std::size_t row_ndx)
+inline void StringColumn::erase(size_t row_ndx)
 {
-    std::size_t last_row_ndx = size() - 1; // Note that size() is slow
+    size_t last_row_ndx = size() - 1; // Note that size() is slow
     bool is_last = row_ndx == last_row_ndx;
     do_erase(row_ndx, is_last); // Throws
 }
 
-inline void AdaptiveStringColumn::move_last_over(std::size_t row_ndx)
+inline void StringColumn::move_last_over(size_t row_ndx)
 {
-    std::size_t last_row_ndx = size() - 1; // Note that size() is slow
+    size_t last_row_ndx = size() - 1;         // Note that size() is slow
     do_move_last_over(row_ndx, last_row_ndx); // Throws
 }
 
-inline void AdaptiveStringColumn::clear()
+inline void StringColumn::swap_rows(size_t row_ndx_1, size_t row_ndx_2)
+{
+    do_swap_rows(row_ndx_1, row_ndx_2); // Throws
+}
+
+inline void StringColumn::clear()
 {
     do_clear(); // Throws
 }
 
-inline int AdaptiveStringColumn::compare_values(std::size_t row1, std::size_t row2) const
+inline int StringColumn::compare_values(size_t row1, size_t row2) const noexcept
 {
     StringData a = get(row1);
     StringData b = get(row2);
@@ -304,29 +316,28 @@ inline int AdaptiveStringColumn::compare_values(std::size_t row1, std::size_t ro
     return utf8_compare(a, b) ? 1 : -1;
 }
 
-inline void AdaptiveStringColumn::set_string(std::size_t row_ndx, StringData value)
+inline void StringColumn::set_string(size_t row_ndx, StringData value)
 {
     REALM_ASSERT(!(value.is_null() && !m_nullable));
     set(row_ndx, value); // Throws
 }
 
-inline bool AdaptiveStringColumn::has_search_index() const REALM_NOEXCEPT
+inline bool StringColumn::has_search_index() const noexcept
 {
     return m_search_index != 0;
 }
 
-inline StringIndex* AdaptiveStringColumn::get_search_index() REALM_NOEXCEPT
+inline StringIndex* StringColumn::get_search_index() noexcept
 {
     return m_search_index.get();
 }
 
-inline const StringIndex* AdaptiveStringColumn::get_search_index() const REALM_NOEXCEPT
+inline const StringIndex* StringColumn::get_search_index() const noexcept
 {
     return m_search_index.get();
 }
 
-inline std::size_t AdaptiveStringColumn::get_size_from_ref(ref_type root_ref,
-                                                           Allocator& alloc) REALM_NOEXCEPT
+inline size_t StringColumn::get_size_from_ref(ref_type root_ref, Allocator& alloc) noexcept
 {
     const char* root_header = alloc.translate(root_ref);
     bool root_is_leaf = !Array::get_is_inner_bptree_node_from_header(root_header);
@@ -344,36 +355,49 @@ inline std::size_t AdaptiveStringColumn::get_size_from_ref(ref_type root_ref,
         // Big strings leaf
         return ArrayBigBlobs::get_size_from_header(root_header);
     }
-    return Array::get_bptree_size_from_header(root_header);
-}
 
-inline bool AdaptiveStringColumn::is_string_col() const REALM_NOEXCEPT
-{
-    return true;
+    return BpTreeNode::get_bptree_size_from_header(root_header);
 }
 
 // Implementing pure virtual method of ColumnBase.
-inline void AdaptiveStringColumn::insert(std::size_t row_ndx, std::size_t num_rows, bool is_append)
+inline void StringColumn::insert_rows(size_t row_ndx, size_t num_rows_to_insert, size_t prior_num_rows,
+                                      bool insert_nulls)
 {
+    REALM_ASSERT_DEBUG(prior_num_rows == size());
+    REALM_ASSERT(row_ndx <= prior_num_rows);
+    REALM_ASSERT(!insert_nulls || m_nullable);
+
     StringData value = m_nullable ? realm::null() : StringData("");
-    do_insert(row_ndx, value, num_rows, is_append); // Throws
+    bool is_append = (row_ndx == prior_num_rows);
+    do_insert(row_ndx, value, num_rows_to_insert, is_append); // Throws
 }
 
 // Implementing pure virtual method of ColumnBase.
-inline void AdaptiveStringColumn::erase(std::size_t row_ndx, bool is_last)
+inline void StringColumn::erase_rows(size_t row_ndx, size_t num_rows_to_erase, size_t prior_num_rows, bool)
 {
-    do_erase(row_ndx, is_last); // Throws
+    REALM_ASSERT_DEBUG(prior_num_rows == size());
+    REALM_ASSERT(num_rows_to_erase <= prior_num_rows);
+    REALM_ASSERT(row_ndx <= prior_num_rows - num_rows_to_erase);
+
+    bool is_last = (row_ndx + num_rows_to_erase == prior_num_rows);
+    for (size_t i = num_rows_to_erase; i > 0; --i) {
+        size_t row_ndx_2 = row_ndx + i - 1;
+        do_erase(row_ndx_2, is_last); // Throws
+    }
 }
 
 // Implementing pure virtual method of ColumnBase.
-inline void AdaptiveStringColumn::move_last_over(std::size_t row_ndx, std::size_t last_row_ndx,
-                                                 bool)
+inline void StringColumn::move_last_row_over(size_t row_ndx, size_t prior_num_rows, bool)
 {
+    REALM_ASSERT_DEBUG(prior_num_rows == size());
+    REALM_ASSERT(row_ndx < prior_num_rows);
+
+    size_t last_row_ndx = prior_num_rows - 1;
     do_move_last_over(row_ndx, last_row_ndx); // Throws
 }
 
 // Implementing pure virtual method of ColumnBase.
-inline void AdaptiveStringColumn::clear(std::size_t, bool)
+inline void StringColumn::clear(size_t, bool)
 {
     do_clear(); // Throws
 }

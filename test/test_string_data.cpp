@@ -1,3 +1,21 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "testsettings.hpp"
 #ifdef TEST_STRING_DATA
 
@@ -7,6 +25,7 @@
 
 #include <realm.hpp>
 #include <realm/string_data.hpp>
+#include <realm/unicode.hpp>
 
 #include "test.hpp"
 
@@ -57,6 +76,13 @@ TEST(StringData_Null)
         StringData sd("");
         CHECK(sd);
         CHECK(!sd.is_null());
+    }
+    // Null must be strictly less-than the empty string.
+    {
+        StringData a = realm::null{};
+        StringData b{""};
+        CHECK(a < b);
+        CHECK(b > a);
     }
 }
 
@@ -173,67 +199,182 @@ TEST(StringData_LexicographicCompare)
     StringData sd_9_11(s_9_11);
     StringData sd_9_22(s_9_22);
 
-    CHECK((sd_0    >= sd_0)    && !(sd_0    <  sd_0));
-    CHECK((sd_0    <= sd_0)    && !(sd_0    >  sd_0));
-    CHECK((sd_0    <  sd_8_11) && !(sd_0    >= sd_8_11));
-    CHECK((sd_0    <= sd_8_11) && !(sd_0    >  sd_8_11));
-    CHECK((sd_0    <  sd_8_22) && !(sd_0    >= sd_8_22));
-    CHECK((sd_0    <= sd_8_22) && !(sd_0    >  sd_8_22));
-    CHECK((sd_0    <  sd_9_11) && !(sd_0    >= sd_9_11));
-    CHECK((sd_0    <= sd_9_11) && !(sd_0    >  sd_9_11));
-    CHECK((sd_0    <  sd_9_22) && !(sd_0    >= sd_9_22));
-    CHECK((sd_0    <= sd_9_22) && !(sd_0    >  sd_9_22));
+    CHECK((sd_0 >= sd_0) && !(sd_0 < sd_0));
+    CHECK((sd_0 <= sd_0) && !(sd_0 > sd_0));
+    CHECK((sd_0 < sd_8_11) && !(sd_0 >= sd_8_11));
+    CHECK((sd_0 <= sd_8_11) && !(sd_0 > sd_8_11));
+    CHECK((sd_0 < sd_8_22) && !(sd_0 >= sd_8_22));
+    CHECK((sd_0 <= sd_8_22) && !(sd_0 > sd_8_22));
+    CHECK((sd_0 < sd_9_11) && !(sd_0 >= sd_9_11));
+    CHECK((sd_0 <= sd_9_11) && !(sd_0 > sd_9_11));
+    CHECK((sd_0 < sd_9_22) && !(sd_0 >= sd_9_22));
+    CHECK((sd_0 <= sd_9_22) && !(sd_0 > sd_9_22));
 
-    CHECK((sd_8_11 >= sd_0)    && !(sd_8_11 <  sd_0));
-    CHECK((sd_8_11 >  sd_0)    && !(sd_8_11 <= sd_0));
-    CHECK((sd_8_11 >= sd_8_11) && !(sd_8_11 <  sd_8_11));
-    CHECK((sd_8_11 <= sd_8_11) && !(sd_8_11 >  sd_8_11));
-    CHECK((sd_8_11 <  sd_8_22) && !(sd_8_11 >= sd_8_22));
-    CHECK((sd_8_11 <= sd_8_22) && !(sd_8_11 >  sd_8_22));
-    CHECK((sd_8_11 <  sd_9_11) && !(sd_8_11 >= sd_9_11));
-    CHECK((sd_8_11 <= sd_9_11) && !(sd_8_11 >  sd_9_11));
-    CHECK((sd_8_11 <  sd_9_22) && !(sd_8_11 >= sd_9_22));
-    CHECK((sd_8_11 <= sd_9_22) && !(sd_8_11 >  sd_9_22));
+    CHECK((sd_8_11 >= sd_0) && !(sd_8_11 < sd_0));
+    CHECK((sd_8_11 > sd_0) && !(sd_8_11 <= sd_0));
+    CHECK((sd_8_11 >= sd_8_11) && !(sd_8_11 < sd_8_11));
+    CHECK((sd_8_11 <= sd_8_11) && !(sd_8_11 > sd_8_11));
+    CHECK((sd_8_11 < sd_8_22) && !(sd_8_11 >= sd_8_22));
+    CHECK((sd_8_11 <= sd_8_22) && !(sd_8_11 > sd_8_22));
+    CHECK((sd_8_11 < sd_9_11) && !(sd_8_11 >= sd_9_11));
+    CHECK((sd_8_11 <= sd_9_11) && !(sd_8_11 > sd_9_11));
+    CHECK((sd_8_11 < sd_9_22) && !(sd_8_11 >= sd_9_22));
+    CHECK((sd_8_11 <= sd_9_22) && !(sd_8_11 > sd_9_22));
 
-    CHECK((sd_8_22 >= sd_0)    && !(sd_8_22 <  sd_0));
-    CHECK((sd_8_22 >  sd_0)    && !(sd_8_22 <= sd_0));
-    CHECK((sd_8_22 >= sd_8_11) && !(sd_8_22 <  sd_8_11));
-    CHECK((sd_8_22 >  sd_8_11) && !(sd_8_22 <= sd_8_11));
-    CHECK((sd_8_22 >= sd_8_22) && !(sd_8_22 <  sd_8_22));
-    CHECK((sd_8_22 <= sd_8_22) && !(sd_8_22 >  sd_8_22));
-    CHECK((sd_8_22 >= sd_9_11) && !(sd_8_22 <  sd_9_11));
-    CHECK((sd_8_22 >  sd_9_11) && !(sd_8_22 <= sd_9_11));
-    CHECK((sd_8_22 <  sd_9_22) && !(sd_8_22 >= sd_9_22));
-    CHECK((sd_8_22 <= sd_9_22) && !(sd_8_22 >  sd_9_22));
+    CHECK((sd_8_22 >= sd_0) && !(sd_8_22 < sd_0));
+    CHECK((sd_8_22 > sd_0) && !(sd_8_22 <= sd_0));
+    CHECK((sd_8_22 >= sd_8_11) && !(sd_8_22 < sd_8_11));
+    CHECK((sd_8_22 > sd_8_11) && !(sd_8_22 <= sd_8_11));
+    CHECK((sd_8_22 >= sd_8_22) && !(sd_8_22 < sd_8_22));
+    CHECK((sd_8_22 <= sd_8_22) && !(sd_8_22 > sd_8_22));
+    CHECK((sd_8_22 >= sd_9_11) && !(sd_8_22 < sd_9_11));
+    CHECK((sd_8_22 > sd_9_11) && !(sd_8_22 <= sd_9_11));
+    CHECK((sd_8_22 < sd_9_22) && !(sd_8_22 >= sd_9_22));
+    CHECK((sd_8_22 <= sd_9_22) && !(sd_8_22 > sd_9_22));
 
-    CHECK((sd_9_11 >= sd_0)    && !(sd_9_11 <  sd_0));
-    CHECK((sd_9_11 >  sd_0)    && !(sd_9_11 <= sd_0));
-    CHECK((sd_9_11 >= sd_8_11) && !(sd_9_11 <  sd_8_11));
-    CHECK((sd_9_11 >  sd_8_11) && !(sd_9_11 <= sd_8_11));
-    CHECK((sd_9_11 <  sd_8_22) && !(sd_9_11 >= sd_8_22));
-    CHECK((sd_9_11 <= sd_8_22) && !(sd_9_11 >  sd_8_22));
-    CHECK((sd_9_11 >= sd_9_11) && !(sd_9_11 <  sd_9_11));
-    CHECK((sd_9_11 <= sd_9_11) && !(sd_9_11 >  sd_9_11));
-    CHECK((sd_9_11 <  sd_9_22) && !(sd_9_11 >= sd_9_22));
-    CHECK((sd_9_11 <= sd_9_22) && !(sd_9_11 >  sd_9_22));
+    CHECK((sd_9_11 >= sd_0) && !(sd_9_11 < sd_0));
+    CHECK((sd_9_11 > sd_0) && !(sd_9_11 <= sd_0));
+    CHECK((sd_9_11 >= sd_8_11) && !(sd_9_11 < sd_8_11));
+    CHECK((sd_9_11 > sd_8_11) && !(sd_9_11 <= sd_8_11));
+    CHECK((sd_9_11 < sd_8_22) && !(sd_9_11 >= sd_8_22));
+    CHECK((sd_9_11 <= sd_8_22) && !(sd_9_11 > sd_8_22));
+    CHECK((sd_9_11 >= sd_9_11) && !(sd_9_11 < sd_9_11));
+    CHECK((sd_9_11 <= sd_9_11) && !(sd_9_11 > sd_9_11));
+    CHECK((sd_9_11 < sd_9_22) && !(sd_9_11 >= sd_9_22));
+    CHECK((sd_9_11 <= sd_9_22) && !(sd_9_11 > sd_9_22));
 
-    CHECK((sd_9_22 >= sd_0)    && !(sd_9_22 <  sd_0));
-    CHECK((sd_9_22 >  sd_0)    && !(sd_9_22 <= sd_0));
-    CHECK((sd_9_22 >= sd_8_11) && !(sd_9_22 <  sd_8_11));
-    CHECK((sd_9_22 >  sd_8_11) && !(sd_9_22 <= sd_8_11));
-    CHECK((sd_9_22 >= sd_8_22) && !(sd_9_22 <  sd_8_22));
-    CHECK((sd_9_22 >  sd_8_22) && !(sd_9_22 <= sd_8_22));
-    CHECK((sd_9_22 >= sd_9_11) && !(sd_9_22 <  sd_9_11));
-    CHECK((sd_9_22 >  sd_9_11) && !(sd_9_22 <= sd_9_11));
-    CHECK((sd_9_22 >= sd_9_22) && !(sd_9_22 <  sd_9_22));
-    CHECK((sd_9_22 <= sd_9_22) && !(sd_9_22 >  sd_9_22));
+    CHECK((sd_9_22 >= sd_0) && !(sd_9_22 < sd_0));
+    CHECK((sd_9_22 > sd_0) && !(sd_9_22 <= sd_0));
+    CHECK((sd_9_22 >= sd_8_11) && !(sd_9_22 < sd_8_11));
+    CHECK((sd_9_22 > sd_8_11) && !(sd_9_22 <= sd_8_11));
+    CHECK((sd_9_22 >= sd_8_22) && !(sd_9_22 < sd_8_22));
+    CHECK((sd_9_22 > sd_8_22) && !(sd_9_22 <= sd_8_22));
+    CHECK((sd_9_22 >= sd_9_11) && !(sd_9_22 < sd_9_11));
+    CHECK((sd_9_22 > sd_9_11) && !(sd_9_22 <= sd_9_11));
+    CHECK((sd_9_22 >= sd_9_22) && !(sd_9_22 < sd_9_22));
+    CHECK((sd_9_22 <= sd_9_22) && !(sd_9_22 > sd_9_22));
 }
 
+TEST(StringData_Like)
+{
+    StringData null = realm::null();
+    StringData empty("");
+    StringData f("f");
+    StringData foo("foo");
+    StringData bar("bar");
+    StringData foobar("foobar");
+    StringData foofoo("foofoo");
+    StringData foobarfoo("foobarfoo");
+    StringData star_in_string("*bar");
+    StringData unicode("\xc3\xa6\xc3\xb8\xc3\xa5\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9etest"); // utf-8 "æøå日本語test"
+
+    CHECK(null.like(null));
+    CHECK(!null.like(""));
+    CHECK(!null.like("*"));
+    CHECK(!null.like("?"));
+    CHECK(!empty.like(null));
+
+    CHECK(empty.like(""));
+    CHECK(empty.like("*"));
+
+    CHECK(!f.like(""));
+    CHECK(f.like("*"));
+    CHECK(foo.like("foo*"));
+    CHECK(foo.like("*foo"));
+    CHECK(foobar.like("foo*"));
+    CHECK(foofoo.like("foo*foo"));
+    CHECK(foobarfoo.like("foo*foo"));
+    CHECK(!foobarfoo.like("foo*bar"));
+    CHECK(star_in_string.like("*ar"));
+
+    CHECK(unicode.like("*test"));
+    CHECK(unicode.like("\xc3\xa6\xc3\xb8\xc3\xa5*"));              // "æøå*"
+    CHECK(unicode.like("\xc3\xa6\xc3\xb8\xc3\xa5*test"));          // "æøå*test"
+    CHECK(unicode.like("*\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e*")); // "*日本語*"
+
+    CHECK(f.like("?"));
+    CHECK(foo.like("?oo"));
+    CHECK(foo.like("f?o"));
+    CHECK(foo.like("fo?"));
+    CHECK(!empty.like("?"));
+    CHECK(!foo.like("foo?"));
+    CHECK(!foo.like("?foo"));
+
+    CHECK(unicode.like("?\xc3\xb8\xc3\xa5\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9etest")); // "?øå日本語test"
+    CHECK(unicode.like("\xc3\xa6?\xc3\xa5\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9etest")); // "æ?å日本語test"));
+    CHECK(unicode.like("\xc3\xa6\xc3\xb8\xc3\xa5?\xe6\x9c\xac\xe8\xaa\x9etest"));     // "æøå?本語test"));
+    CHECK(unicode.like("\xc3\xa6?\xc3\xa5?\xe6\x9c\xac?test"));                       // "æ?å?本?t?s?"));
+
+    CHECK(foo.like("?oo*"));
+    CHECK(foo.like("*?o?"));
+    CHECK(foobar.like("???*"));
+    CHECK(foofoo.like("?oo*?oo"));
+    CHECK(foobarfoo.like("?oo*?oo"));
+    CHECK(!foobarfoo.like("*f*x*"));
+}
+
+TEST(StringData_Like_CaseInsensitive)
+{
+    StringData null = realm::null();
+    StringData empty("");
+    StringData f("f");
+    StringData foo("FoO");
+    StringData bar("bAr");
+    StringData foobar("FOOBAR");
+    StringData foofoo("FOOfoo");
+    StringData foobarfoo("FoObArFoO");
+    StringData star_in_string("*bar");
+    StringData unicode("\xc3\xa6\xc3\xb8\xc3\xa5\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9etest"); // utf-8 "æøå日本語test"
+
+    CHECK(string_like_ins(null, null));
+    CHECK(!string_like_ins(null, ""));
+    CHECK(!string_like_ins(null, "*"));
+    CHECK(!string_like_ins(null, "?"));
+    CHECK(!string_like_ins("", null));
+
+    CHECK(string_like_ins(empty, ""));
+    CHECK(string_like_ins(empty, "*"));
+
+    CHECK(!string_like_ins(f, ""));
+    CHECK(string_like_ins(f, "*"));
+    CHECK(string_like_ins(foo, "foo*"));
+    CHECK(string_like_ins(foo, "*foo"));
+    CHECK(string_like_ins(foobar, "foo*"));
+    CHECK(string_like_ins(foofoo, "foo*foo"));
+    CHECK(string_like_ins(foobarfoo, "foo*foo"));
+    CHECK(!string_like_ins(foobarfoo, "foo*bar"));
+    CHECK(string_like_ins(star_in_string, "*ar"));
+
+    CHECK(string_like_ins(unicode, "*test"));
+    CHECK(string_like_ins(unicode, "\xc3\xa6\xc3\xb8\xc3\xa5*"));              // "æøå*"
+    CHECK(string_like_ins(unicode, "\xc3\xa6\xc3\xb8\xc3\xa5*test"));          // "æøå*test"
+    CHECK(string_like_ins(unicode, "*\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e*")); // "*日本語*"
+
+    CHECK(string_like_ins(f, "?"));
+    CHECK(string_like_ins(foo, "?oo"));
+    CHECK(string_like_ins(foo, "f?o"));
+    CHECK(string_like_ins(foo, "fo?"));
+    CHECK(!string_like_ins(empty, "?"));
+    CHECK(!string_like_ins(foo, "foo?"));
+    CHECK(!string_like_ins(foo, "?foo"));
+
+    CHECK(string_like_ins(unicode, "?\xc3\xb8\xc3\xa5\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9etest")); // "?øå日本語test"
+    CHECK(string_like_ins(unicode, "\xc3\xa6?\xc3\xa5\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9etest")); // "æ?å日本語test"
+    CHECK(string_like_ins(unicode, "\xc3\xa6\xc3\xb8\xc3\xa5?\xe6\x9c\xac\xe8\xaa\x9etest")); // "æøå?本語test"
+    CHECK(string_like_ins(unicode, "\xc3\xa6?\xc3\xa5?\xe6\x9c\xac?test"));                   // "æ?å?本?t?s?"
+
+    CHECK(string_like_ins(foo, "?oo*"));
+    CHECK(string_like_ins(foo, "*?o?"));
+    CHECK(string_like_ins(foobar, "???*"));
+    CHECK(string_like_ins(foofoo, "?oo*?oo"));
+    CHECK(string_like_ins(foobarfoo, "?oo*?oo"));
+    CHECK(!string_like_ins(foobarfoo, "*f*x*"));
+}
 
 TEST(StringData_Substrings)
 {
     // Reasoning behind behaviour is that if you append strings A + B then B is a suffix of a, and hence A
-    // "ends with" B, and B "begins with" A. This is true even though appending a null or empty string keeps the 
+    // "ends with" B, and B "begins with" A. This is true even though appending a null or empty string keeps the
     // original unchanged
 
     StringData empty("");
@@ -281,7 +422,7 @@ TEST(StringData_Substrings)
     CHECK_EQUAL("", empty.prefix(0));
     CHECK_EQUAL("", empty.suffix(0));
     CHECK_EQUAL("", empty.substr(0));
-    CHECK_EQUAL("", empty.substr(0,0));
+    CHECK_EQUAL("", empty.substr(0, 0));
 
     StringData sd("Minkowski");
     CHECK(sd.begins_with(empty));
@@ -298,10 +439,10 @@ TEST(StringData_Substrings)
     CHECK(!sd.begins_with("ski"));
     CHECK(!sd.ends_with("Min"));
     CHECK(!sd.contains("wok"));
-    CHECK_EQUAL("Min",    sd.prefix(3));
-    CHECK_EQUAL("ski",    sd.suffix(3));
+    CHECK_EQUAL("Min", sd.prefix(3));
+    CHECK_EQUAL("ski", sd.suffix(3));
     CHECK_EQUAL("kowski", sd.substr(3));
-    CHECK_EQUAL("kow",    sd.substr(3,3));
+    CHECK_EQUAL("kow", sd.substr(3, 3));
 }
 
 

@@ -1,3 +1,21 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "testsettings.hpp"
 
 #include <limits>
@@ -10,9 +28,11 @@
 using namespace realm;
 using namespace realm::test_util;
 
-TEST(ArrayInteger_Sum0)
+using realm::util::unwrap;
+
+TEST_TYPES(ArrayInteger_Sum0, ArrayInteger, ArrayIntNull)
 {
-    ArrayInteger a(Allocator::get_default());
+    TEST_TYPE a(Allocator::get_default());
     a.create(Array::type_Normal);
 
     for (int i = 0; i < 64 + 7; ++i) {
@@ -22,9 +42,9 @@ TEST(ArrayInteger_Sum0)
     a.destroy();
 }
 
-TEST(ArrayInteger_Sum1)
+TEST_TYPES(ArrayInteger_Sum1, ArrayInteger, ArrayIntNull)
 {
-    ArrayInteger a(Allocator::get_default());
+    TEST_TYPE a(Allocator::get_default());
     a.create(Array::type_Normal);
 
     int64_t s1 = 0;
@@ -33,20 +53,20 @@ TEST(ArrayInteger_Sum1)
 
     s1 = 0;
     for (int i = 0; i < 256 + 7; ++i)
-        s1 += a.get(i);
+        s1 += unwrap(a.get(i));
     CHECK_EQUAL(s1, a.sum(0, a.size()));
 
     s1 = 0;
     for (int i = 3; i < 100; ++i)
-        s1 += a.get(i);
+        s1 += unwrap(a.get(i));
     CHECK_EQUAL(s1, a.sum(3, 100));
 
     a.destroy();
 }
 
-TEST(ArrayInteger_Sum2)
+TEST_TYPES(ArrayInteger_Sum2, ArrayInteger, ArrayIntNull)
 {
-    ArrayInteger a(Allocator::get_default());
+    TEST_TYPE a(Allocator::get_default());
     a.create(Array::type_Normal);
 
     int64_t s1 = 0;
@@ -55,21 +75,21 @@ TEST(ArrayInteger_Sum2)
 
     s1 = 0;
     for (int i = 0; i < 256 + 7; ++i)
-        s1 += a.get(i);
+        s1 += unwrap(a.get(i));
     CHECK_EQUAL(s1, a.sum(0, a.size()));
 
     s1 = 0;
     for (int i = 3; i < 100; ++i)
-        s1 += a.get(i);
+        s1 += unwrap(a.get(i));
     CHECK_EQUAL(s1, a.sum(3, 100));
 
     a.destroy();
 }
 
 
-TEST(ArrayInteger_Sum4)
+TEST_TYPES(ArrayInteger_Sum4, ArrayInteger, ArrayIntNull)
 {
-    ArrayInteger a(Allocator::get_default());
+    TEST_TYPE a(Allocator::get_default());
     a.create(Array::type_Normal);
 
     int64_t s1 = 0;
@@ -78,20 +98,20 @@ TEST(ArrayInteger_Sum4)
 
     s1 = 0;
     for (int i = 0; i < 256 + 7; ++i)
-        s1 += a.get(i);
+        s1 += unwrap(a.get(i));
     CHECK_EQUAL(s1, a.sum(0, a.size()));
 
     s1 = 0;
     for (int i = 3; i < 100; ++i)
-        s1 += a.get(i);
+        s1 += unwrap(a.get(i));
     CHECK_EQUAL(s1, a.sum(3, 100));
 
     a.destroy();
 }
 
-TEST(ArrayInteger_Sum16)
+TEST_TYPES(ArrayInteger_Sum16, ArrayInteger, ArrayIntNull)
 {
-    ArrayInteger a(Allocator::get_default());
+    TEST_TYPE a(Allocator::get_default());
     a.create(Array::type_Normal);
 
     int64_t s1 = 0;
@@ -100,18 +120,58 @@ TEST(ArrayInteger_Sum16)
 
     s1 = 0;
     for (int i = 0; i < 256 + 7; ++i)
-        s1 += a.get(i);
+        s1 += unwrap(a.get(i));
     CHECK_EQUAL(s1, a.sum(0, a.size()));
 
     s1 = 0;
     for (int i = 3; i < 100; ++i)
-        s1 += a.get(i);
+        s1 += unwrap(a.get(i));
     CHECK_EQUAL(s1, a.sum(3, 100));
 
     a.destroy();
 }
 
-TEST(ArrayIntNull_SetNull) {
+TEST(ArrayIntNull_InitFromTruncatedRef)
+{
+    // This is used when clearing/truncating the B+tree.
+
+    Array inner_node(Allocator::get_default());
+    inner_node.create(Array::type_Normal);
+    inner_node.add(123);
+    inner_node.add(456);
+
+    inner_node.clear();
+    CHECK_EQUAL(0, inner_node.size());
+
+    ArrayIntNull new_leaf(Allocator::get_default());
+    new_leaf.init_from_ref(inner_node.get_ref()); // ownership transferred
+    CHECK_EQUAL(0, new_leaf.size());
+    new_leaf.destroy();
+}
+
+TEST(ArrayIntNull_InitFromParent)
+{
+    Array inner_node(Allocator::get_default());
+    inner_node.create(Array::type_HasRefs);
+
+    {
+        ArrayIntNull leaf(Allocator::get_default());
+        leaf.create(Array::type_Normal);
+        leaf.add(123);
+        inner_node.add(0);
+        inner_node.set_as_ref(0, leaf.get_ref());
+    }
+
+    ArrayIntNull leaf2(Allocator::get_default());
+    leaf2.set_parent(&inner_node, 0);
+    leaf2.init_from_parent();
+    CHECK_EQUAL(123, leaf2.get(0));
+    inner_node.clear_and_destroy_children();
+    inner_node.destroy();
+}
+
+TEST(ArrayIntNull_SetNull)
+{
     ArrayIntNull a(Allocator::get_default());
     a.create(Array::type_Normal);
 
@@ -129,7 +189,8 @@ TEST(ArrayIntNull_SetNull) {
     a.destroy();
 }
 
-TEST(ArrayIntNull_SetIntegerToPreviousNullValueChoosesNewNull) {
+TEST(ArrayIntNull_SetIntegerToPreviousNullValueChoosesNewNull)
+{
     ArrayIntNull a(Allocator::get_default());
     a.create(Array::type_Normal);
 
@@ -151,7 +212,8 @@ TEST(ArrayIntNull_SetIntegerToPreviousNullValueChoosesNewNull) {
     a.destroy();
 }
 
-TEST(ArrayIntNull_Boundaries) {
+TEST(ArrayIntNull_Boundaries)
+{
     ArrayIntNull a(Allocator::get_default());
     a.create(Array::type_Normal);
     a.add(0);
@@ -221,31 +283,13 @@ TEST(ArrayIntNull_Boundaries) {
     a.add(std::numeric_limits<int_fast64_t>::min());
     CHECK_EQUAL(std::numeric_limits<int_fast64_t>::min(), a.back());
     CHECK(a.is_null(0));
-    a.add(std::numeric_limits<uint_fast64_t>::max());
-    CHECK_EQUAL(std::numeric_limits<uint_fast64_t>::max(), a.get_uint(a.size()-1));
-    CHECK(a.is_null(0));
-
-
-    a.destroy();
-}
-
-TEST(ArrayIntNull_SetUint0) {
-    ArrayIntNull a(Allocator::get_default());
-    a.create(Array::type_Normal);
-    a.add(0);
-    a.add(0);
-
-    a.set_uint(0, 0);
-    a.set_null(1);
-
-    CHECK(!a.is_null(0));
-    CHECK(a.is_null(1));
 
     a.destroy();
 }
 
 // Test if allocator relocation preserves null and non-null
-TEST(ArrayIntNull_Relocate) {
+TEST(ArrayIntNull_Relocate)
+{
     ArrayIntNull a(Allocator::get_default());
     a.create(Array::type_Normal);
 
@@ -274,20 +318,32 @@ TEST(ArrayIntNull_Find)
     }
     a.add(0x100);
     a.set(50, 0x44);
-    a.set(60, 0x44);
     a.set_null(51);
+    a.set(60, 0x44);
 
-    size_t t0 = a.find_first<NotEqual>(0x33);
-    CHECK_EQUAL(50, t0);
+    size_t t = a.find_first<NotEqual>(0x33);
+    CHECK_EQUAL(50, t);
 
-    size_t t1 = a.find_first<NotEqual>(0x33, 0, 50);
-    CHECK_EQUAL(not_found, t1);
+    t = a.find_first<NotEqual>(0x33, 0, 50);
+    CHECK_EQUAL(not_found, t);
+
+    t = a.find_first<NotEqual>(null());
+    CHECK_EQUAL(0, t);
+
+    t = a.find_first<NotEqual>(null(), 51);
+    CHECK_EQUAL(52, t);
 
     size_t t2 = a.find_first(0x44);
     CHECK_EQUAL(50, t2);
 
+    t2 = a.find_first(null());
+    CHECK_EQUAL(51, t2);
+
     size_t t3 = a.find_first(0);
     CHECK_EQUAL(not_found, t3);
+
+    size_t t22 = a.find_first<Greater>(0x100);
+    CHECK_EQUAL(t22, not_found);
 
     int64_t t4;
     a.minimum(t4);
@@ -299,23 +355,22 @@ TEST(ArrayIntNull_Find)
 
     int64_t t6;
     size_t i6;
-    bool found = a.maximum(t6, 0 , npos, &i6);
+    bool found = a.maximum(t6, 0, npos, &i6);
     CHECK_EQUAL(100, i6);
     CHECK_EQUAL(0x100, t6);
     CHECK_EQUAL(found, true);
 
     {
-        ref_type col_ref = Column::create(Allocator::get_default());
-        Column col(Allocator::get_default(), col_ref);
+        ref_type col_ref = IntegerColumn::create(Allocator::get_default());
+        IntegerColumn col(Allocator::get_default(), col_ref);
 
         a.find_all(&col, 0x44);
 
         CHECK_EQUAL(2, col.size());
-        CHECK_EQUAL(a[col.get(0)], 0x44);
-        CHECK_EQUAL(a[col.get(1)], 0x44);
+        CHECK_EQUAL(a[static_cast<size_t>(col.get(0))], 0x44);
+        CHECK_EQUAL(a[static_cast<size_t>(col.get(1))], 0x44);
 
         col.destroy();
-
     }
     a.destroy();
 }

@@ -1,9 +1,30 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include <cstdlib>
-#include <cstdio> // debug
 #include <algorithm>
+#include <cstring>
+
+#ifdef REALM_DEBUG
+#include <cstdio>
 #include <iostream>
 #include <iomanip>
-#include <cstring>
+#endif
 
 #include <realm/utilities.hpp>
 #include <realm/array_string.hpp>
@@ -15,15 +36,13 @@ using namespace realm;
 
 namespace {
 
-const int max_width = 64;
-
-// Round up to nearest possible block length: 0, 1, 4, 8, 16, 32, 64, 128, ... We include 1 to store empty 
+// Round up to nearest possible block length: 0, 1, 2, 4, 8, 16, 32, 64, 128, 256. We include 1 to store empty
 // strings in as little space as possible, because 0 can only store nulls.
 size_t round_up(size_t size)
 {
     REALM_ASSERT(size <= 256);
 
-    if (size <= 1)
+    if (size <= 2)
         return size;
 
     size--;
@@ -53,35 +72,26 @@ void ArrayString::set_null(size_t ndx)
 void ArrayString::set(size_t ndx, StringData value)
 {
     REALM_ASSERT_3(ndx, <, m_size);
-    REALM_ASSERT_3(value.size(), <, size_t(max_width)); // otherwise we have to use another column type
+    REALM_ASSERT_3(value.size(), <, max_width); // otherwise we have to use another column type
 
-    // Check if we need to copy before modifying
-    copy_on_write(); // Throws
+    // if m_width == 0 and m_nullable == true, then entire array contains only null entries
+    // if m_width == 0 and m_nullable == false, then entire array contains only "" entries
+    if ((m_nullable ? value.is_null() : value.size() == 0) && m_width == 0) {
+        return; // existing element in array already equals the value we want to set it to
+    }
 
     // Make room for the new value plus a zero-termination
     if (m_width <= value.size()) {
-        // if m_width == 0 and m_nullable == true, then entire array contains only null entries
-        // if m_width == 0 and m_nullable == false, then entire array contains only "" entries
-        if ((m_nullable ? value.is_null() : value.size() == 0) && m_width == 0) {
-            return; // existing element in array already equals the value we want to set it to
-        }
-
         // Calc min column width
-        size_t new_width;
-        if (m_width == 0 && value.size() == 0)
-            new_width = ::round_up(1); // Entire Array is nulls; expand to m_width > 0
-        else
-            new_width = ::round_up(value.size() + 1);
-
-        // FIXME: Should we try to avoid double copying when realloc fails to preserve the address?
+        size_t new_width = ::round_up(value.size() + 1);
         alloc(m_size, new_width); // Throws
 
         char* base = m_data;
-        char* new_end = base + m_size*new_width;
+        char* new_end = base + m_size * new_width;
 
         // Expand the old values in reverse order
         if (0 < m_width) {
-            const char* old_end = base + m_size*m_width;
+            const char* old_end = base + m_size * m_width;
             while (new_end != base) {
                 *--new_end = char(*--old_end + (new_width - m_width));
                 {
@@ -102,8 +112,8 @@ void ArrayString::set(size_t ndx, StringData value)
         else {
             // m_width == 0. Expand to new width.
             while (new_end != base) {
-                REALM_ASSERT_3(new_width, <= , max_width);
-                *--new_end = static_cast<char>(new_width); 
+                REALM_ASSERT_3(new_width, <=, max_width);
+                *--new_end = static_cast<char>(new_width);
                 {
                     char* new_begin = new_end - (new_width - 1);
                     std::fill(new_begin, new_end, 0); // Fill with zero bytes
@@ -112,7 +122,12 @@ void ArrayString::set(size_t ndx, StringData value)
             }
         }
 
-        m_width = new_width;
+        m_width = uint_least8_t(new_width);
+    }
+    else if (is_read_only()) {
+        if (get(ndx) == value)
+            return;
+        copy_on_write();
     }
 
     REALM_ASSERT_3(0, <, m_width);
@@ -120,12 +135,12 @@ void ArrayString::set(size_t ndx, StringData value)
     // Set the value
     char* begin = m_data + (ndx * m_width);
     char* end = begin + (m_width - 1);
-    begin = std::copy(value.data(), value.data() + value.size(), begin);
+    begin = realm::safe_copy_n(value.data(), value.size(), begin);
     std::fill(begin, end, 0); // Pad with zero bytes
-    REALM_STATIC_ASSERT(max_width <= max_width, "Padding size must fit in 7-bits");
+    static_assert(max_width <= max_width, "Padding size must fit in 7-bits");
 
     if (value.is_null()) {
-        REALM_ASSERT_3(m_width, <= , 128);
+        REALM_ASSERT_3(m_width, <=, 128);
         *end = static_cast<char>(m_width);
     }
     else {
@@ -138,14 +153,11 @@ void ArrayString::set(size_t ndx, StringData value)
 void ArrayString::insert(size_t ndx, StringData value)
 {
     REALM_ASSERT_3(ndx, <=, m_size);
-    REALM_ASSERT(value.size() < size_t(max_width)); // otherwise we have to use another column type
+    REALM_ASSERT(value.size() < max_width); // otherwise we have to use another column type
 
-    // Check if we need to copy before modifying
-    copy_on_write(); // Throws
-
-    // Todo: Below code will perform up to 3 memcpy() operations in worst case. Todo, if we improve the
-    // allocator to make a gap for the new value for us, we can have just 1. We can also have 2 by merging
-    // memmove() and set(), but it's a bit complex. May be done after support of realm::null() is completed.
+    // FIXME: this performs up to 2 memcpy() operations. This could be improved
+    // by making the allocator make a gap for the new value for us, but it's a
+    // bit complex.
 
     // Allocate room for the new value
     alloc(m_size + 1, m_width); // Throws
@@ -169,10 +181,10 @@ void ArrayString::erase(size_t ndx)
 
     // move data backwards after deletion
     if (ndx < m_size - 1) {
-        char* new_begin = m_data + ndx*m_width;
+        char* new_begin = m_data + ndx * m_width;
         char* old_begin = new_begin + m_width;
-        char* old_end = m_data + m_size*m_width;
-        std::copy(old_begin, old_end, new_begin);
+        char* old_end = m_data + m_size * m_width;
+        realm::safe_copy_n(old_begin, old_end - old_begin, new_begin);
     }
 
     --m_size;
@@ -181,22 +193,21 @@ void ArrayString::erase(size_t ndx)
     set_header_size(m_size);
 }
 
-size_t ArrayString::CalcByteLen(size_t count, size_t width) const
+size_t ArrayString::calc_byte_len(size_t num_items, size_t width) const
 {
-    // FIXME: This arithemtic could overflow. Consider using one of
-    // the functions in <realm/util/safe_int_ops.hpp>
-    return header_size + (count * width);
+    return header_size + (num_items * width);
 }
 
-size_t ArrayString::CalcItemCount(size_t bytes, size_t width) const REALM_NOEXCEPT
+size_t ArrayString::calc_item_count(size_t bytes, size_t width) const noexcept
 {
-    if (width == 0) return size_t(-1); // zero-width gives infinite space
+    if (width == 0)
+        return size_t(-1); // zero-width gives infinite space
 
     size_t bytes_without_header = bytes - header_size;
     return bytes_without_header / width;
 }
 
-size_t ArrayString::count(StringData value, size_t begin, size_t end) const REALM_NOEXCEPT
+size_t ArrayString::count(StringData value, size_t begin, size_t end) const noexcept
 {
     size_t num_matches = 0;
 
@@ -212,7 +223,7 @@ size_t ArrayString::count(StringData value, size_t begin, size_t end) const REAL
     return num_matches;
 }
 
-size_t ArrayString::find_first(StringData value, size_t begin, size_t end) const REALM_NOEXCEPT
+size_t ArrayString::find_first(StringData value, size_t begin, size_t end) const noexcept
 {
     if (end == size_t(-1))
         end = m_size;
@@ -239,9 +250,9 @@ size_t ArrayString::find_first(StringData value, size_t begin, size_t end) const
     else if (value.size() == 0) {
         const char* data = m_data + (m_width - 1);
         for (size_t i = begin; i != end; ++i) {
-            size_t size = (m_width - 1) - data[i * m_width];
+            size_t data_i_size = (m_width - 1) - data[i * m_width];
             // left-hand-side tests if array element is NULL
-            if (REALM_UNLIKELY(size == 0))
+            if (REALM_UNLIKELY(data_i_size == 0))
                 return i;
         }
     }
@@ -254,8 +265,8 @@ size_t ArrayString::find_first(StringData value, size_t begin, size_t end) const
                     break;
                 ++j;
                 if (REALM_UNLIKELY(j == value.size())) {
-                    size_t size = (m_width - 1) - data[m_width - 1];
-                    if (REALM_LIKELY(size == value.size()))
+                    size_t data_size = (m_width - 1) - data[m_width - 1];
+                    if (REALM_LIKELY(data_size == value.size()))
                         return i;
                     break;
                 }
@@ -266,8 +277,7 @@ size_t ArrayString::find_first(StringData value, size_t begin, size_t end) const
     return not_found;
 }
 
-void ArrayString::find_all(Column& result, StringData value, size_t add_offset,
-    size_t begin, size_t end)
+void ArrayString::find_all(IntegerColumn& result, StringData value, size_t add_offset, size_t begin, size_t end)
 {
     size_t begin_2 = begin;
     for (;;) {
@@ -279,7 +289,7 @@ void ArrayString::find_all(Column& result, StringData value, size_t add_offset,
     }
 }
 
-bool ArrayString::compare_string(const ArrayString& c) const REALM_NOEXCEPT
+bool ArrayString::compare_string(const ArrayString& c) const noexcept
 {
     if (c.size() != size())
         return false;
@@ -296,10 +306,11 @@ ref_type ArrayString::bptree_leaf_insert(size_t ndx, StringData value, TreeInser
 {
     size_t leaf_size = size();
     REALM_ASSERT_3(leaf_size, <=, REALM_MAX_BPNODE_SIZE);
-    if (leaf_size < ndx) ndx = leaf_size;
+    if (leaf_size < ndx)
+        ndx = leaf_size;
     if (REALM_LIKELY(leaf_size < REALM_MAX_BPNODE_SIZE)) {
         insert(ndx, value); // Throws
-        return 0; // Leaf was not split
+        return 0;           // Leaf was not split
     }
 
     // Split leaf node
@@ -312,8 +323,8 @@ ref_type ArrayString::bptree_leaf_insert(size_t ndx, StringData value, TreeInser
     else {
         for (size_t i = ndx; i != leaf_size; ++i)
             new_leaf.add(get(i)); // Throws
-        truncate(ndx); // Throws
-        add(value); // Throws
+        truncate(ndx);            // Throws
+        add(value);               // Throws
         state.m_split_offset = ndx + 1;
     }
     state.m_split_size = leaf_size + 1;
@@ -321,27 +332,27 @@ ref_type ArrayString::bptree_leaf_insert(size_t ndx, StringData value, TreeInser
 }
 
 
-MemRef ArrayString::slice(size_t offset, size_t size, Allocator& target_alloc) const
+MemRef ArrayString::slice(size_t offset, size_t slice_size, Allocator& target_alloc) const
 {
     REALM_ASSERT(is_attached());
 
     // FIXME: This can be optimized as a single contiguous copy
     // operation.
-    ArrayString slice(target_alloc, m_nullable);
-    _impl::ShallowArrayDestroyGuard dg(&slice);
-    slice.create(); // Throws
+    ArrayString array_slice(target_alloc, m_nullable);
+    _impl::ShallowArrayDestroyGuard dg(&array_slice);
+    array_slice.create(); // Throws
     size_t begin = offset;
-    size_t end = offset + size;
+    size_t end = offset + slice_size;
     for (size_t i = begin; i != end; ++i) {
         StringData value = get(i);
-        slice.add(value); // Throws
+        array_slice.add(value); // Throws
     }
     dg.release();
-    return slice.get_mem();
+    return array_slice.get_mem();
 }
 
 
-#ifdef REALM_DEBUG
+#ifdef REALM_DEBUG // LCOV_EXCL_START ignore debug functions
 
 void ArrayString::string_stats() const
 {
@@ -350,18 +361,19 @@ void ArrayString::string_stats() const
 
     for (size_t i = 0; i < m_size; ++i) {
         StringData str = get(i);
-        size_t size = str.size() + 1;
-        total += size;
-        if (size > longest) longest = size;
+        size_t str_size = str.size() + 1;
+        total += str_size;
+        if (str_size > longest)
+            longest = str_size;
     }
 
-    size_t size = m_size * m_width;
-    size_t zeroes = size - total;
+    size_t array_size = m_size * m_width;
+    size_t zeroes = array_size - total;
     size_t zavg = zeroes / (m_size ? m_size : 1); // avoid possible div by zero
 
     std::cout << "Size: " << m_size << "\n";
     std::cout << "Width: " << m_width << "\n";
-    std::cout << "Total: " << size << "\n";
+    std::cout << "Total: " << array_size << "\n";
     std::cout << "Capacity: " << m_capacity << "\n\n";
     std::cout << "Bytes string: " << total << "\n";
     std::cout << "     longest: " << longest << "\n";
@@ -398,4 +410,4 @@ void ArrayString::to_dot(std::ostream& out, StringData title) const
     to_dot_parent_edge(out);
 }
 
-#endif // REALM_DEBUG
+#endif // LCOV_EXCL_STOP ignore debug functions

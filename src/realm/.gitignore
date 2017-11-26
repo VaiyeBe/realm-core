@@ -14,20 +14,26 @@
 /impl/*.gcno
 /impl/*.gcda
 
-/librealm.a
-/librealm.so
-/librealm.so.*
-/librealm.dylib
-/librealm.*.dylib
-/librealm-dbg.a
-/librealm-dbg.so
-/librealm-dbg.so.*
-/librealm-dbg.dylib
-/librealm-dbg.*.dylib
-/librealm-cov.so
-/librealm-cov.so.*
-/librealm-cov.dylib
-/librealm-cov.*.dylib
+# ASAN
+/*-asan
+/*-asan-noinst
+/*-asan-dbg
+/*-asan-dbg-noinst
+/*-asan-cov
+/*-asan-cov-noinst
+
+# TSAN
+/*-tsan
+/*-tsan-noinst
+/*-tsan-dbg
+/*-tsan-dbg-noinst
+/*-tsan-cov
+/*-tsan-cov-noinst
+
+/librealm*.a
+/librealm*.so
+/librealm*.so.*
+/librealm*.dylib
 
 /realm-import
 /realm-import-noinst
@@ -46,15 +52,22 @@
 /realm-config
 /realm-config-dbg
 
+/realm-config-macosx
+/realm-config-macosx-dbg
+
 # iPhone
-/librealm-iPhoneOS.a
-/librealm-iPhoneOS-dbg.a
-/librealm-iPhoneSimulator.a
-/librealm-iPhoneSimulator-dbg.a
 /realm-config-ios
 /realm-config-ios-dbg
 
-# Android
-/librealm-android-*.a
+# Watch
+/realm-config-watchos
+/realm-config-watchos-dbg
+
+# TV
+/realm-config-tvos
+/realm-config-tvos-dbg
 
 /util/config.h
+
+/realm-schema-dump*
+/realm-schema-dump-dbg*

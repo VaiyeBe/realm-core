@@ -1,35 +1,34 @@
 /*************************************************************************
  *
- * REALM CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] Realm Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of Realm Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to Realm Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from Realm Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
 
+#include <cstring>
 #include <stdexcept>
 
 #include <realm/util/thread.hpp>
 
 #if !defined _WIN32
-#  include <unistd.h>
+#include <unistd.h>
 #endif
 
 // "Process shared mutexes" are not officially supported on Android,
 // but they appear to work anyway.
-#if _POSIX_THREAD_PROCESS_SHARED > 0 || REALM_ANDROID
-#  define REALM_HAVE_PTHREAD_PROCESS_SHARED
+#if (defined(_POSIX_THREAD_PROCESS_SHARED) && _POSIX_THREAD_PROCESS_SHARED > 0) || REALM_ANDROID
+#define REALM_HAVE_PTHREAD_PROCESS_SHARED
 #endif
 
 // Unfortunately Older Ubuntu releases such as 10.04 reports support
@@ -40,64 +39,84 @@
 // Support was added to glibc 2.12, so we disable for earlier versions
 // of glibs
 #ifdef REALM_HAVE_PTHREAD_PROCESS_SHARED
-#  if !defined _WIN32 // 'robust' not supported by our windows pthreads port
-#    if _POSIX_THREADS >= 200809L
-#      ifdef __GNU_LIBRARY__
-#        if __GLIBC__ >= 2  && __GLIBC_MINOR__ >= 12
-#          define REALM_HAVE_ROBUST_PTHREAD_MUTEX
-#        endif
-#      else
-#        define REALM_HAVE_ROBUST_PTHREAD_MUTEX
-#      endif
-#    endif
-#  endif
+#if !defined _WIN32 // 'robust' not supported by our windows pthreads port
+#if _POSIX_THREADS >= 200809L
+#ifdef __GNU_LIBRARY__
+#if __GLIBC__ >= 2 && __GLIBC_MINOR__ >= 12
+#define REALM_HAVE_ROBUST_PTHREAD_MUTEX
+#endif
+#else
+#define REALM_HAVE_ROBUST_PTHREAD_MUTEX
+#endif
+#endif
+#endif
 #endif
 
 
 using namespace realm;
 using namespace realm::util;
 
-
-namespace {
-
-// Valgrind can show still-reachable leaks for pthread_create() on many systems (AIX, Debian, etc) because
-// glibc declares a static memory pool for threads which are free'd by the OS on process termination. See
-// http://www.network-theory.co.uk/docs/valgrind/valgrind_20.html under --run-libc-freeres=<yes|no>.
-// This can give false positives because of missing suppression, etc (not real leaks!). It's also a problem
-// on Windows, so we have written our own clean-up method for the Windows port.
-#if defined _WIN32 && defined REALM_DEBUG
-void free_threadpool();
-
-class Initialization
-{
-public:
-    ~Initialization()
-    {
-        free_threadpool();
-    }
-};
-
-Initialization initialization;
-
-void free_threadpool()
-{
-    pthread_cleanup();
-}
-#endif
-
-} // anonymous namespace
-
-
 void Thread::join()
 {
     if (!m_joinable)
         throw std::runtime_error("Thread is not joinable");
-    void** value_ptr = 0; // Ignore return value
+
+#ifdef _WIN32
+    // Returns void; error handling not possible
+    m_std_thread.join();
+#else
+    void** value_ptr = nullptr; // Ignore return value
     int r = pthread_join(m_id, value_ptr);
     if (REALM_UNLIKELY(r != 0))
         join_failed(r); // Throws
+#endif
+
     m_joinable = false;
 }
+
+
+void Thread::set_name(const std::string& name)
+{
+#if defined _GNU_SOURCE && !REALM_ANDROID && !REALM_PLATFORM_APPLE
+    const size_t max = 16;
+    size_t n = name.size();
+    if (n > max - 1)
+        n = max - 1;
+    char name_2[max];
+    std::copy(name.data(), name.data() + n, name_2);
+    name_2[n] = '\0';
+    pthread_t id = pthread_self();
+    int r = pthread_setname_np(id, name_2);
+    if (REALM_UNLIKELY(r != 0))
+        throw std::runtime_error("pthread_setname_np() failed.");
+#elif REALM_PLATFORM_APPLE
+    int r = pthread_setname_np(name.data());
+    if (REALM_UNLIKELY(r != 0))
+        throw std::runtime_error("pthread_setname_np() failed.");
+#else
+    static_cast<void>(name);
+#endif
+}
+
+
+bool Thread::get_name(std::string& name)
+{
+#if (defined _GNU_SOURCE && !REALM_ANDROID) || REALM_PLATFORM_APPLE
+    const size_t max = 64;
+    char name_2[max];
+    pthread_t id = pthread_self();
+    int r = pthread_getname_np(id, name_2, max);
+    if (REALM_UNLIKELY(r != 0))
+        throw std::runtime_error("pthread_getname_np() failed.");
+    name_2[max - 1] = '\0';              // Eliminate any risk of buffer overrun in strlen().
+    name.assign(name_2, strlen(name_2)); // Throws
+    return true;
+#else
+    static_cast<void>(name);
+    return false;
+#endif
+}
+
 
 REALM_NORETURN void Thread::create_failed(int)
 {
@@ -119,18 +138,17 @@ void Mutex::init_as_process_shared(bool robust_if_available)
         attr_init_failed(r);
     r = pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
     REALM_ASSERT(r == 0);
-#  ifdef REALM_HAVE_ROBUST_PTHREAD_MUTEX
+#ifdef REALM_HAVE_ROBUST_PTHREAD_MUTEX
     if (robust_if_available) {
         r = pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);
         REALM_ASSERT(r == 0);
     }
-#  else // !REALM_HAVE_ROBUST_PTHREAD_MUTEX
+#else // !REALM_HAVE_ROBUST_PTHREAD_MUTEX
     static_cast<void>(robust_if_available);
-#  endif
+#endif
     r = pthread_mutex_init(&m_impl, &attr);
     int r2 = pthread_mutexattr_destroy(&attr);
     REALM_ASSERT(r2 == 0);
-    static_cast<void>(r2);
     if (REALM_UNLIKELY(r != 0))
         init_failed(r);
 #else // !REALM_HAVE_PTHREAD_PROCESS_SHARED
@@ -159,7 +177,7 @@ REALM_NORETURN void Mutex::attr_init_failed(int err)
     }
 }
 
-REALM_NORETURN void Mutex::destroy_failed(int err) REALM_NOEXCEPT
+REALM_NORETURN void Mutex::destroy_failed(int err) noexcept
 {
     if (err == EBUSY)
         REALM_TERMINATE("Destruction of mutex in use");
@@ -167,15 +185,22 @@ REALM_NORETURN void Mutex::destroy_failed(int err) REALM_NOEXCEPT
 }
 
 
-REALM_NORETURN void Mutex::lock_failed(int err) REALM_NOEXCEPT
+REALM_NORETURN void Mutex::lock_failed(int err) noexcept
 {
-    if (err == EDEADLK)
-        REALM_TERMINATE("Recursive locking of mutex");
-    REALM_TERMINATE("pthread_mutex_lock() failed");
+    switch (err) {
+        case EDEADLK:
+            REALM_TERMINATE("pthread_mutex_lock() failed: Recursive locking of mutex (deadlock)");
+        case EINVAL:
+            REALM_TERMINATE("pthread_mutex_lock() failed: Invalid mutex object provided");
+        case EAGAIN:
+            REALM_TERMINATE("pthread_mutex_lock() failed: Maximum number of recursive locks exceeded");
+        default:
+            REALM_TERMINATE("pthread_mutex_lock() failed");
+    }
 }
 
 
-bool RobustMutex::is_robust_on_this_platform() REALM_NOEXCEPT
+bool RobustMutex::is_robust_on_this_platform() noexcept
 {
 #ifdef REALM_HAVE_ROBUST_PTHREAD_MUTEX
     return true;
@@ -186,6 +211,9 @@ bool RobustMutex::is_robust_on_this_platform() REALM_NOEXCEPT
 
 bool RobustMutex::low_level_lock()
 {
+#ifdef _WIN32
+    REALM_ASSERT_RELEASE(false);
+#else
     int r = pthread_mutex_lock(&m_impl);
     if (REALM_LIKELY(r == 0))
         return true;
@@ -196,30 +224,58 @@ bool RobustMutex::low_level_lock()
         throw NotRecoverable();
 #endif
     lock_failed(r);
+#endif // _WIN32
 }
 
-bool RobustMutex::is_valid() REALM_NOEXCEPT
+int RobustMutex::try_low_level_lock()
 {
+#ifdef _WIN32
+    REALM_ASSERT_RELEASE(false);
+#else
+    int r = pthread_mutex_trylock(&m_impl);
+    if (REALM_LIKELY(r == 0))
+        return 1;
+    if (r == EBUSY)
+        return 0;
+#ifdef REALM_HAVE_ROBUST_PTHREAD_MUTEX
+    if (r == EOWNERDEAD)
+        return -1;
+    if (r == ENOTRECOVERABLE)
+        throw NotRecoverable();
+#endif
+    lock_failed(r);
+#endif // _WIN32
+}
+
+bool RobustMutex::is_valid() noexcept
+{
+#ifdef _WIN32    
+    REALM_ASSERT_RELEASE(false);
+#else
+    // FIXME: This check tries to lock the mutex, and only unlocks it if the
+    // return value is zero. If pthread_mutex_trylock() fails with EOWNERDEAD,
+    // this leads to deadlock during the following propper attempt to lock. This
+    // cannot be fixed by also unlocking on failure with EOWNERDEAD, because
+    // that would mark the mutex as consistent again and prevent the expected
+    // notification.
     int r = pthread_mutex_trylock(&m_impl);
     if (r == 0) {
         r = pthread_mutex_unlock(&m_impl);
         REALM_ASSERT(r == 0);
-        static_cast<void>(r);
         return true;
     }
     return r != EINVAL;
+#endif
 }
 
 
-void RobustMutex::mark_as_consistent() REALM_NOEXCEPT
+void RobustMutex::mark_as_consistent() noexcept
 {
 #ifdef REALM_HAVE_ROBUST_PTHREAD_MUTEX
     int r = pthread_mutex_consistent(&m_impl);
     REALM_ASSERT(r == 0);
-    static_cast<void>(r);
 #endif
 }
-
 
 
 CondVar::CondVar(process_shared_tag)
@@ -234,10 +290,9 @@ CondVar::CondVar(process_shared_tag)
     r = pthread_cond_init(&m_impl, &attr);
     int r2 = pthread_condattr_destroy(&attr);
     REALM_ASSERT(r2 == 0);
-    static_cast<void>(r2);
     if (REALM_UNLIKELY(r != 0))
         init_failed(r);
-#else // !REALM_HAVE_PTHREAD_PROCESS_SHARED
+#else
     throw std::runtime_error("No support for process-shared condition variables");
 #endif
 }
@@ -254,15 +309,21 @@ REALM_NORETURN void CondVar::init_failed(int err)
 
 void CondVar::handle_wait_error(int err)
 {
+    switch (err) {
 #ifdef REALM_HAVE_ROBUST_PTHREAD_MUTEX
-    if (err == ENOTRECOVERABLE)
-        throw RobustMutex::NotRecoverable();
-    if (err == EOWNERDEAD)
-        return;
-#else
-    static_cast<void>(err);
+        case ENOTRECOVERABLE:
+            throw RobustMutex::NotRecoverable();
+        case EOWNERDEAD:
+            return;
 #endif
-    REALM_TERMINATE("pthread_mutex_lock() failed");
+        case EINVAL:
+            REALM_TERMINATE("pthread_cond_wait()/pthread_cond_timedwait() failed: Invalid argument provided");
+        case EPERM:
+            REALM_TERMINATE("pthread_cond_wait()/pthread_cond_timedwait() failed:"
+                            "Mutex not owned by calling thread");
+        default:
+            REALM_TERMINATE("pthread_cond_wait()/pthread_cond_timedwait() failed");
+    }
 }
 
 REALM_NORETURN void CondVar::attr_init_failed(int err)
@@ -275,7 +336,7 @@ REALM_NORETURN void CondVar::attr_init_failed(int err)
     }
 }
 
-REALM_NORETURN void CondVar::destroy_failed(int err) REALM_NOEXCEPT
+REALM_NORETURN void CondVar::destroy_failed(int err) noexcept
 {
     if (err == EBUSY)
         REALM_TERMINATE("Destruction of condition variable in use");

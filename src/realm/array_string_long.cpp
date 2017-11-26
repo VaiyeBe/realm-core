@@ -1,8 +1,20 @@
-#ifdef _MSC_VER
-#include <win32/types.h> //ssize_t
-#endif
-
-#include <iostream>
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
 
 #include <realm/array_string_long.hpp>
 #include <realm/array_blob.hpp>
@@ -12,7 +24,7 @@
 using namespace realm;
 
 
-void ArrayStringLong::init_from_mem(MemRef mem) REALM_NOEXCEPT
+void ArrayStringLong::init_from_mem(MemRef mem) noexcept
 {
     Array::init_from_mem(mem);
     ref_type offsets_ref = get_as_ref(0);
@@ -44,13 +56,13 @@ void ArrayStringLong::set(size_t ndx, StringData value)
 {
     REALM_ASSERT_3(ndx, <, m_offsets.size());
 
-    size_t begin = 0 < ndx ? to_size_t(m_offsets.get(ndx-1)) : 0;
-    size_t end   = to_size_t(m_offsets.get(ndx));
+    size_t begin = 0 < ndx ? to_size_t(m_offsets.get(ndx - 1)) : 0;
+    size_t end = to_size_t(m_offsets.get(ndx));
     bool add_zero_term = true;
     m_blob.replace(begin, end, value.data(), value.size(), add_zero_term);
 
     size_t new_end = begin + value.size() + 1;
-    int64_t diff =  int64_t(new_end) - int64_t(end);
+    int64_t diff = int64_t(new_end) - int64_t(end);
     m_offsets.adjust(ndx, m_offsets.size(), diff);
     if (m_nullable)
         m_nulls.set(ndx, !value.is_null());
@@ -60,12 +72,12 @@ void ArrayStringLong::insert(size_t ndx, StringData value)
 {
     REALM_ASSERT_3(ndx, <=, m_offsets.size());
 
-    size_t pos = 0 < ndx ? to_size_t(m_offsets.get(ndx-1)) : 0;
+    size_t pos = 0 < ndx ? to_size_t(m_offsets.get(ndx - 1)) : 0;
     bool add_zero_term = true;
 
     m_blob.insert(pos, value.data(), value.size(), add_zero_term);
     m_offsets.insert(ndx, pos + value.size() + 1);
-    m_offsets.adjust(ndx+1, m_offsets.size(), value.size() + 1);
+    m_offsets.adjust(ndx + 1, m_offsets.size(), value.size() + 1);
     if (m_nullable)
         m_nulls.insert(ndx, !value.is_null());
 }
@@ -74,8 +86,8 @@ void ArrayStringLong::erase(size_t ndx)
 {
     REALM_ASSERT_3(ndx, <, m_offsets.size());
 
-    size_t begin = 0 < ndx ? to_size_t(m_offsets.get(ndx-1)) : 0;
-    size_t end   = to_size_t(m_offsets.get(ndx));
+    size_t begin = 0 < ndx ? to_size_t(m_offsets.get(ndx - 1)) : 0;
+    size_t end = to_size_t(m_offsets.get(ndx));
 
     m_blob.erase(begin, end);
     m_offsets.erase(ndx);
@@ -103,8 +115,7 @@ void ArrayStringLong::set_null(size_t ndx)
     }
 }
 
-size_t ArrayStringLong::count(StringData value, size_t begin,
-                              size_t end) const REALM_NOEXCEPT
+size_t ArrayStringLong::count(StringData value, size_t begin, size_t end) const noexcept
 {
     size_t num_matches = 0;
 
@@ -120,13 +131,12 @@ size_t ArrayStringLong::count(StringData value, size_t begin,
     return num_matches;
 }
 
-size_t ArrayStringLong::find_first(StringData value, size_t begin,
-                                   size_t end) const REALM_NOEXCEPT
+size_t ArrayStringLong::find_first(StringData value, size_t begin, size_t end) const noexcept
 {
     size_t n = size();
     if (end == npos)
         end = n;
-    REALM_ASSERT_7(begin, <= , n, &&, end, <= , n);
+    REALM_ASSERT_7(begin, <=, n, &&, end, <=, n);
     REALM_ASSERT_3(begin, <=, end);
 
     for (size_t i = begin; i < end; ++i) {
@@ -138,8 +148,8 @@ size_t ArrayStringLong::find_first(StringData value, size_t begin,
     return not_found;
 }
 
-void ArrayStringLong::find_all(Column& result, StringData value, size_t add_offset,
-                              size_t begin, size_t end) const
+void ArrayStringLong::find_all(IntegerColumn& result, StringData value, size_t add_offset, size_t begin,
+                               size_t end) const
 {
     size_t begin_2 = begin;
     for (;;) {
@@ -152,7 +162,7 @@ void ArrayStringLong::find_all(Column& result, StringData value, size_t add_offs
 }
 
 
-StringData ArrayStringLong::get(const char* header, size_t ndx, Allocator& alloc, bool nullable) REALM_NOEXCEPT
+StringData ArrayStringLong::get(const char* header, size_t ndx, Allocator& alloc, bool nullable) noexcept
 {
     ref_type offsets_ref;
     ref_type blob_ref;
@@ -175,11 +185,11 @@ StringData ArrayStringLong::get(const char* header, size_t ndx, Allocator& alloc
     if (0 < ndx) {
         std::pair<int64_t, int64_t> p = get_two(offsets_header, ndx - 1);
         begin = to_size_t(p.first);
-        end   = to_size_t(p.second);
+        end = to_size_t(p.second);
     }
     else {
         begin = 0;
-        end   = to_size_t(Array::get(offsets_header, 0));
+        end = to_size_t(Array::get(offsets_header, 0));
     }
     --end; // Discount the terminating zero
 
@@ -199,7 +209,7 @@ ref_type ArrayStringLong::bptree_leaf_insert(size_t ndx, StringData value, TreeI
         ndx = leaf_size;
     if (REALM_LIKELY(leaf_size < REALM_MAX_BPNODE_SIZE)) {
         insert(ndx, value); // Throws
-        return 0; // Leaf was not split
+        return 0;           // Leaf was not split
     }
 
     // Split leaf node
@@ -212,8 +222,8 @@ ref_type ArrayStringLong::bptree_leaf_insert(size_t ndx, StringData value, TreeI
     else {
         for (size_t i = ndx; i != leaf_size; ++i)
             new_leaf.add(get(i)); // Throws
-        truncate(ndx); // Throws
-        add(value); // Throws
+        truncate(ndx);            // Throws
+        add(value);               // Throws
         state.m_split_offset = ndx + 1;
     }
     state.m_split_size = leaf_size + 1;
@@ -232,26 +242,25 @@ MemRef ArrayStringLong::create_array(size_t size, Allocator& alloc, bool nullabl
         bool context_flag = false;
         int_fast64_t value = 0;
         MemRef mem = ArrayInteger::create_array(type_Normal, context_flag, size, value, alloc); // Throws
-        dg_2.reset(mem.m_ref);
-        int64_t v(mem.m_ref); // FIXME: Dangerous cast (unsigned -> signed)
+        dg_2.reset(mem.get_ref());
+        int64_t v(from_ref(mem.get_ref()));
         top.add(v); // Throws
         dg_2.release();
     }
     {
         size_t blobs_size = 0;
         MemRef mem = ArrayBlob::create_array(blobs_size, alloc); // Throws
-        dg_2.reset(mem.m_ref);
-        int64_t v(mem.m_ref); // FIXME: Dangerous cast (unsigned -> signed)
+        dg_2.reset(mem.get_ref());
+        int64_t v(from_ref(mem.get_ref()));
         top.add(v); // Throws
         dg_2.release();
     }
-    if (nullable)
-    {
+    if (nullable) {
         bool context_flag = false;
         int64_t value = 0; // initialize all rows to realm::null()
         MemRef mem = ArrayInteger::create_array(type_Normal, context_flag, size, value, alloc); // Throws
-        dg_2.reset(mem.m_ref);
-        int64_t v(mem.m_ref); // FIXME: Dangerous cast (unsigned -> signed)
+        dg_2.reset(mem.get_ref());
+        int64_t v(from_ref(mem.get_ref()));
         top.add(v); // Throws
         dg_2.release();
     }
@@ -261,25 +270,25 @@ MemRef ArrayStringLong::create_array(size_t size, Allocator& alloc, bool nullabl
 }
 
 
-MemRef ArrayStringLong::slice(size_t offset, size_t size, Allocator& target_alloc) const
+MemRef ArrayStringLong::slice(size_t offset, size_t slice_size, Allocator& target_alloc) const
 {
     REALM_ASSERT(is_attached());
 
-    ArrayStringLong slice(target_alloc, m_nullable);
-    _impl::ShallowArrayDestroyGuard dg(&slice);
-    slice.create(); // Throws
+    ArrayStringLong array_slice(target_alloc, m_nullable);
+    _impl::ShallowArrayDestroyGuard dg(&array_slice);
+    array_slice.create(); // Throws
     size_t begin = offset;
-    size_t end   = offset + size;
+    size_t end = offset + slice_size;
     for (size_t i = begin; i != end; ++i) {
         StringData value = get(i);
-        slice.add(value); // Throws
+        array_slice.add(value); // Throws
     }
     dg.release();
-    return slice.get_mem();
+    return array_slice.get_mem();
 }
 
 
-#ifdef REALM_DEBUG
+#ifdef REALM_DEBUG // LCOV_EXCL_START ignore debug functions
 
 void ArrayStringLong::to_dot(std::ostream& out, StringData title) const
 {
@@ -298,4 +307,4 @@ void ArrayStringLong::to_dot(std::ostream& out, StringData title) const
     out << "}" << std::endl;
 }
 
-#endif // REALM_DEBUG
+#endif // LCOV_EXCL_STOP ignore debug functions

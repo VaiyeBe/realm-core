@@ -1,22 +1,21 @@
 /*************************************************************************
  *
- * REALM CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] Realm Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of Realm Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to Realm Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from Realm Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
+
 #ifndef REALM_ARRAY_STRING_LONG_HPP
 #define REALM_ARRAY_STRING_LONG_HPP
 
@@ -26,12 +25,18 @@
 namespace realm {
 
 
-class ArrayStringLong: public Array {
+class ArrayStringLong : public Array {
 public:
     typedef StringData value_type;
 
-    explicit ArrayStringLong(Allocator&, bool nullable) REALM_NOEXCEPT;
-    ~ArrayStringLong() REALM_NOEXCEPT override{}
+    explicit ArrayStringLong(Allocator&, bool nullable) noexcept;
+    ~ArrayStringLong() noexcept override
+    {
+    }
+
+    // Disable copying, this is not allowed.
+    ArrayStringLong& operator=(const ArrayStringLong&) = delete;
+    ArrayStringLong(const ArrayStringLong&) = delete;
 
     /// Create a new empty long string array and attach this accessor to
     /// it. This does not modify the parent reference information of
@@ -43,59 +48,58 @@ public:
 
     //@{
     /// Overriding functions of Array
-    void init_from_ref(ref_type) REALM_NOEXCEPT;
-    void init_from_mem(MemRef) REALM_NOEXCEPT;
-    void init_from_parent() REALM_NOEXCEPT;
+    void init_from_ref(ref_type) noexcept;
+    void init_from_mem(MemRef) noexcept;
+    void init_from_parent() noexcept;
     //@}
 
-    bool is_empty() const REALM_NOEXCEPT;
-    std::size_t size() const REALM_NOEXCEPT;
+    bool is_empty() const noexcept;
+    size_t size() const noexcept;
 
-    StringData get(std::size_t ndx) const REALM_NOEXCEPT;
+    StringData get(size_t ndx) const noexcept;
 
 
     void add(StringData value);
-    void set(std::size_t ndx, StringData value);
-    void insert(std::size_t ndx, StringData value);
-    void erase(std::size_t ndx);
-    void truncate(std::size_t size);
+    void set(size_t ndx, StringData value);
+    void insert(size_t ndx, StringData value);
+    void erase(size_t ndx);
+    void truncate(size_t size);
     void clear();
     void destroy();
 
     bool is_null(size_t ndx) const;
     void set_null(size_t ndx);
 
-    std::size_t count(StringData value, std::size_t begin = 0,
-                      std::size_t end = npos) const REALM_NOEXCEPT;
-    std::size_t find_first(StringData value, std::size_t begin = 0,
-                           std::size_t end = npos) const REALM_NOEXCEPT;
-    void find_all(Column &result, StringData value, std::size_t add_offset = 0,
-                  std::size_t begin = 0, std::size_t end = npos) const;
+    size_t count(StringData value, size_t begin = 0, size_t end = npos) const noexcept;
+    size_t find_first(StringData value, size_t begin = 0, size_t end = npos) const noexcept;
+    void find_all(IntegerColumn& result, StringData value, size_t add_offset = 0, size_t begin = 0,
+                  size_t end = npos) const;
 
     /// Get the specified element without the cost of constructing an
     /// array instance. If an array instance is already available, or
     /// you need to get multiple values, then this method will be
     /// slower.
-    static StringData get(const char* header, std::size_t ndx, Allocator&, bool nullable) REALM_NOEXCEPT;
+    static StringData get(const char* header, size_t ndx, Allocator&, bool nullable) noexcept;
 
-    ref_type bptree_leaf_insert(std::size_t ndx, StringData, TreeInsertBase&);
+    ref_type bptree_leaf_insert(size_t ndx, StringData, TreeInsertBase&);
 
-    static std::size_t get_size_from_header(const char*, Allocator&) REALM_NOEXCEPT;
+    static size_t get_size_from_header(const char*, Allocator&) noexcept;
 
     /// Construct a long string array of the specified size and return
     /// just the reference to the underlying memory. All elements will
     /// be initialized to zero size blobs.
-    static MemRef create_array(std::size_t size, Allocator&, bool nullable);
+    static MemRef create_array(size_t size, Allocator&, bool nullable);
 
     /// Construct a copy of the specified slice of this long string
     /// array using the specified target allocator.
-    MemRef slice(std::size_t offset, std::size_t size, Allocator& target_alloc) const;
+    MemRef slice(size_t offset, size_t slice_size, Allocator& target_alloc) const;
 
 #ifdef REALM_DEBUG
     void to_dot(std::ostream&, StringData title = StringData()) const;
 #endif
 
-    bool update_from_parent(std::size_t old_baseline) REALM_NOEXCEPT;
+    bool update_from_parent(size_t old_baseline) noexcept;
+
 private:
     ArrayInteger m_offsets;
     ArrayBlob m_blob;
@@ -104,11 +108,13 @@ private:
 };
 
 
-
-
 // Implementation:
-inline ArrayStringLong::ArrayStringLong(Allocator& alloc, bool nullable) REALM_NOEXCEPT:
-    Array(alloc), m_offsets(alloc), m_blob(alloc), m_nulls(nullable ? alloc : Allocator::get_default()), m_nullable(nullable)
+inline ArrayStringLong::ArrayStringLong(Allocator& allocator, bool nullable) noexcept
+    : Array(allocator)
+    , m_offsets(allocator)
+    , m_blob(allocator)
+    , m_nulls(nullable ? allocator : Allocator::get_default())
+    , m_nullable(nullable)
 {
     m_offsets.set_parent(this, 0);
     m_blob.set_parent(this, 1);
@@ -118,69 +124,66 @@ inline ArrayStringLong::ArrayStringLong(Allocator& alloc, bool nullable) REALM_N
 
 inline void ArrayStringLong::create()
 {
-    std::size_t size = 0;
-    MemRef mem = create_array(size, get_alloc(), m_nullable); // Throws
+    size_t init_size = 0;
+    MemRef mem = create_array(init_size, get_alloc(), m_nullable); // Throws
     init_from_mem(mem);
 }
 
-inline void ArrayStringLong::init_from_ref(ref_type ref) REALM_NOEXCEPT
+inline void ArrayStringLong::init_from_ref(ref_type ref) noexcept
 {
     REALM_ASSERT(ref);
     char* header = get_alloc().translate(ref);
-    init_from_mem(MemRef(header, ref));
+    init_from_mem(MemRef(header, ref, m_alloc));
     m_nullable = (Array::size() == 3);
 }
 
-inline void ArrayStringLong::init_from_parent() REALM_NOEXCEPT
+inline void ArrayStringLong::init_from_parent() noexcept
 {
     ref_type ref = get_ref_from_parent();
     init_from_ref(ref);
 }
 
-inline bool ArrayStringLong::is_empty() const REALM_NOEXCEPT
+inline bool ArrayStringLong::is_empty() const noexcept
 {
     return m_offsets.is_empty();
 }
 
-inline std::size_t ArrayStringLong::size() const REALM_NOEXCEPT
+inline size_t ArrayStringLong::size() const noexcept
 {
     return m_offsets.size();
 }
 
-inline StringData ArrayStringLong::get(std::size_t ndx) const REALM_NOEXCEPT
+inline StringData ArrayStringLong::get(size_t ndx) const noexcept
 {
     REALM_ASSERT_3(ndx, <, m_offsets.size());
 
     if (m_nullable && m_nulls.get(ndx) == 0)
         return realm::null();
 
-    std::size_t begin, end;
+    size_t begin, end;
     if (0 < ndx) {
-        // FIXME: Consider how much of a performance problem it is,
-        // that we have to issue two separate calls to read two
-        // consecutive values from an array.
-        begin = to_size_t(m_offsets.get(ndx-1));
-        end   = to_size_t(m_offsets.get(ndx));
+        begin = to_size_t(m_offsets.get(ndx - 1));
+        end = to_size_t(m_offsets.get(ndx));
     }
     else {
         begin = 0;
-        end   = to_size_t(m_offsets.get(0));
+        end = to_size_t(m_offsets.get(0));
     }
     --end; // Discount the terminating zero
 
-    return StringData(m_blob.get(begin), end-begin);
+    return StringData(m_blob.get(begin), end - begin);
 }
 
-inline void ArrayStringLong::truncate(std::size_t size)
+inline void ArrayStringLong::truncate(size_t new_size)
 {
-    REALM_ASSERT_3(size, <, m_offsets.size());
+    REALM_ASSERT_3(new_size, <, m_offsets.size());
 
-    std::size_t blob_size = size ? to_size_t(m_offsets.get(size-1)) : 0;
+    size_t blob_size = new_size ? to_size_t(m_offsets.get(new_size - 1)) : 0;
 
-    m_offsets.truncate(size);
+    m_offsets.truncate(new_size);
     m_blob.truncate(blob_size);
     if (m_nullable)
-        m_nulls.truncate(size);
+        m_nulls.truncate(new_size);
 }
 
 inline void ArrayStringLong::clear()
@@ -200,7 +203,7 @@ inline void ArrayStringLong::destroy()
     Array::destroy();
 }
 
-inline bool ArrayStringLong::update_from_parent(size_t old_baseline) REALM_NOEXCEPT
+inline bool ArrayStringLong::update_from_parent(size_t old_baseline) noexcept
 {
     bool res = Array::update_from_parent(old_baseline);
     if (res) {
@@ -212,8 +215,7 @@ inline bool ArrayStringLong::update_from_parent(size_t old_baseline) REALM_NOEXC
     return res;
 }
 
-inline std::size_t ArrayStringLong::get_size_from_header(const char* header,
-                                                         Allocator& alloc) REALM_NOEXCEPT
+inline size_t ArrayStringLong::get_size_from_header(const char* header, Allocator& alloc) noexcept
 {
     ref_type offsets_ref = to_ref(Array::get(header, 0));
     const char* offsets_header = alloc.translate(offsets_ref);

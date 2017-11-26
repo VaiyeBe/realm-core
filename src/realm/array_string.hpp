@@ -1,22 +1,21 @@
 /*************************************************************************
  *
- * REALM CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] Realm Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of Realm Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to Realm Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from Realm Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
+
 #ifndef REALM_ARRAY_STRING_HPP
 #define REALM_ARRAY_STRING_HPP
 
@@ -25,7 +24,7 @@
 namespace realm {
 
 /*
-ArrayString stores strings as a concecutive list of fixed-length blocks of m_width bytes. The 
+ArrayString stores strings as a concecutive list of fixed-length blocks of m_width bytes. The
 longest string it can store is (m_width - 1) bytes before it needs to expand.
 
 An example of the format for m_width = 4 is following sequence of bytes, where x is payload:
@@ -40,46 +39,47 @@ New: If m_witdh = 0, then all elements are realm::null(). So to add an empty str
 New: StringData is null() if-and-only-if StringData::data() == 0.
 */
 
-class ArrayString: public Array {
+class ArrayString : public Array {
 public:
+    static const size_t max_width = 64;
+
     typedef StringData value_type;
     // Constructor defaults to non-nullable because we use non-nullable ArrayString so many places internally in core
     // (data which isn't user payload) where null isn't needed.
-    explicit ArrayString(Allocator&, bool nullable = false) REALM_NOEXCEPT;
-    explicit ArrayString(no_prealloc_tag) REALM_NOEXCEPT;
-    ~ArrayString() REALM_NOEXCEPT override {}
+    explicit ArrayString(Allocator&, bool nullable = false) noexcept;
+    ~ArrayString() noexcept override
+    {
+    }
 
     bool is_null(size_t ndx) const;
     void set_null(size_t ndx);
-    StringData get(std::size_t ndx) const REALM_NOEXCEPT;
+    StringData get(size_t ndx) const noexcept;
     void add();
     void add(StringData value);
-    void set(std::size_t ndx, StringData value);
-    void insert(std::size_t ndx, StringData value);
-    void erase(std::size_t ndx);
+    void set(size_t ndx, StringData value);
+    void insert(size_t ndx, StringData value);
+    void erase(size_t ndx);
 
-    std::size_t count(StringData value, std::size_t begin = 0,
-                      std::size_t end = npos) const REALM_NOEXCEPT;
-    std::size_t find_first(StringData value, std::size_t begin = 0,
-                           std::size_t end = npos) const REALM_NOEXCEPT;
-    void find_all(Column& result, StringData value, std::size_t add_offset = 0,
-                  std::size_t begin = 0, std::size_t end = npos);
+    size_t count(StringData value, size_t begin = 0, size_t end = npos) const noexcept;
+    size_t find_first(StringData value, size_t begin = 0, size_t end = npos) const noexcept;
+    void find_all(IntegerColumn& result, StringData value, size_t add_offset = 0, size_t begin = 0,
+                  size_t end = npos);
 
     /// Compare two string arrays for equality.
-    bool compare_string(const ArrayString&) const REALM_NOEXCEPT;
+    bool compare_string(const ArrayString&) const noexcept;
 
     /// Get the specified element without the cost of constructing an
     /// array instance. If an array instance is already available, or
     /// you need to get multiple values, then this method will be
     /// slower.
-    static StringData get(const char* header, std::size_t ndx, bool nullable) REALM_NOEXCEPT;
+    static StringData get(const char* header, size_t ndx, bool nullable) noexcept;
 
-    ref_type bptree_leaf_insert(std::size_t ndx, StringData, TreeInsertBase& state);
+    ref_type bptree_leaf_insert(size_t ndx, StringData, TreeInsertBase& state);
 
     /// Construct a string array of the specified size and return just
     /// the reference to the underlying memory. All elements will be
     /// initialized to the empty string.
-    static MemRef create_array(std::size_t size, Allocator&);
+    static MemRef create_array(size_t size, Allocator&);
 
     /// Create a new empty string array and attach this accessor to
     /// it. This does not modify the parent reference information of
@@ -91,7 +91,7 @@ public:
 
     /// Construct a copy of the specified slice of this string array
     /// using the specified target allocator.
-    MemRef slice(std::size_t offset, std::size_t size, Allocator& target_alloc) const;
+    MemRef slice(size_t offset, size_t slice_size, Allocator& target_alloc) const;
 
 #ifdef REALM_DEBUG
     void string_stats() const;
@@ -99,60 +99,51 @@ public:
 #endif
 
 private:
-    std::size_t CalcByteLen(std::size_t count, std::size_t width) const override;
-    std::size_t CalcItemCount(std::size_t bytes,
-                              std::size_t width) const REALM_NOEXCEPT override;
-    WidthType GetWidthType() const override { return wtype_Multiply; }
+    size_t calc_byte_len(size_t num_items, size_t width) const override;
+    size_t calc_item_count(size_t bytes, size_t width) const noexcept override;
 
     bool m_nullable;
 };
 
 
-
 // Implementation:
 
 // Creates new array (but invalid, call init_from_ref() to init)
-inline ArrayString::ArrayString(Allocator& alloc, bool nullable) REALM_NOEXCEPT:
-Array(alloc), m_nullable(nullable)
-{
-}
-
-// Fastest way to instantiate an Array. For use with GetDirect() that only fills out m_width, m_data
-// and a few other basic things needed for read-only access. Or for use if you just want a way to call
-// some methods written in ArrayString.*
-inline ArrayString::ArrayString(no_prealloc_tag) REALM_NOEXCEPT:
-    Array(*static_cast<Allocator*>(0))
+inline ArrayString::ArrayString(Allocator& allocator, bool nullable) noexcept
+    : Array(allocator)
+    , m_nullable(nullable)
 {
 }
 
 inline void ArrayString::create()
 {
-    std::size_t size = 0;
-    MemRef mem = create_array(size, get_alloc()); // Throws
+    size_t init_size = 0;
+    MemRef mem = create_array(init_size, get_alloc()); // Throws
     init_from_mem(mem);
 }
 
-inline MemRef ArrayString::create_array(std::size_t size, Allocator& alloc)
+inline MemRef ArrayString::create_array(size_t init_size, Allocator& allocator)
 {
     bool context_flag = false;
     int_fast64_t value = 0;
-    return Array::create(type_Normal, context_flag, wtype_Multiply, size, value, alloc); // Throws
+    return Array::create(type_Normal, context_flag, wtype_Multiply, init_size, value, allocator); // Throws
 }
 
-inline StringData ArrayString::get(std::size_t ndx) const REALM_NOEXCEPT
+inline StringData ArrayString::get(size_t ndx) const noexcept
 {
     REALM_ASSERT_3(ndx, <, m_size);
     if (m_width == 0)
         return m_nullable ? realm::null() : StringData("");
 
     const char* data = m_data + (ndx * m_width);
-    std::size_t size = (m_width-1) - data[m_width-1];
+    size_t array_size = (m_width - 1) - data[m_width - 1];
 
-    if (size == static_cast<size_t>(-1))
+    if (array_size == static_cast<size_t>(-1))
         return m_nullable ? realm::null() : StringData("");
 
-    REALM_ASSERT(data[size] == 0); // Realm guarantees 0 terminated return strings
-    return StringData(data, size);
+    REALM_ASSERT_EX(data[array_size] == 0, data[array_size],
+                    array_size); // Realm guarantees 0 terminated return strings
+    return StringData(data, array_size);
 }
 
 inline void ArrayString::add(StringData value)
@@ -166,16 +157,16 @@ inline void ArrayString::add()
     add(m_nullable ? realm::null() : StringData("")); // Throws
 }
 
-inline StringData ArrayString::get(const char* header, std::size_t ndx, bool nullable) REALM_NOEXCEPT
+inline StringData ArrayString::get(const char* header, size_t ndx, bool nullable) noexcept
 {
     REALM_ASSERT(ndx < get_size_from_header(header));
-    std::size_t width = get_width_from_header(header);
+    uint_least8_t width = get_width_from_header(header);
     const char* data = get_data_from_header(header) + (ndx * width);
 
     if (width == 0)
         return nullable ? realm::null() : StringData("");
 
-    std::size_t size = (width-1) - data[width-1];
+    size_t size = (width - 1) - data[width - 1];
 
     if (size == static_cast<size_t>(-1))
         return nullable ? realm::null() : StringData("");

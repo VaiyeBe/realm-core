@@ -1,17 +1,37 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include <stdexcept>
 #include <iomanip>
 #include <cmath>
 #include <sstream>
 
+#include <realm/util/features.h>
+#include <realm/util/assert.hpp>
+
 #if defined _WIN32
-#  define NOMINMAX
-#  include <windows.h>
-#elif defined __APPLE__
-#  include <sys/resource.h>
-#  include <mach/mach_time.h>
-#  include <sys/time.h>
+#include <windows.h>
+#elif REALM_PLATFORM_APPLE
+#include <sys/resource.h>
+#include <mach/mach_time.h>
+#include <sys/time.h>
 #else
-#  include <time.h>
+#include <ctime>
 #endif
 
 #include "timer.hpp"
@@ -24,7 +44,19 @@ using namespace realm::test_util;
 
 uint_fast64_t Timer::get_timer_ticks() const
 {
-    return GetTickCount();
+    switch (m_type) {
+        case type_RealTime:
+            return GetTickCount64();
+        case type_UserTime:
+#if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP)
+            FILETIME creation, exit, kernel, user;
+            BOOL b = GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernel, &user);
+            REALM_ASSERT_RELEASE(b);
+            return (static_cast<uint_fast64_t>(user.dwHighDateTime) << 32) + user.dwLowDateTime;      
+#endif
+    }
+
+    return 0;
 }
 
 double Timer::calc_elapsed_seconds(uint_fast64_t ticks) const
@@ -33,7 +65,7 @@ double Timer::calc_elapsed_seconds(uint_fast64_t ticks) const
 }
 
 
-#elif defined __APPLE__
+#elif REALM_PLATFORM_APPLE
 
 
 uint_fast64_t Timer::get_timer_ticks() const
@@ -59,7 +91,8 @@ struct TimeBase {
     {
         mach_timebase_info_data_t info;
         kern_return_t err = mach_timebase_info(&info);
-        if (err) throw std::runtime_error("Failed to get absolute time base");
+        if (err)
+            throw std::runtime_error("Failed to get absolute time base");
         m_seconds_per_tick = (1E-9 * info.numer) / info.denom;
     }
 };
@@ -107,7 +140,7 @@ uint_fast64_t Timer::get_timer_ticks() const
 {
     static const InitialTimes init_times;
     clockid_t clock_id = clockid_t();
-    const timespec* init_time = 0;
+    const timespec* init_time = nullptr;
     switch (m_type) {
         case type_RealTime:
             clock_id = real_time_clock_id;
@@ -121,11 +154,10 @@ uint_fast64_t Timer::get_timer_ticks() const
     timespec time;
     clock_gettime(clock_id, &time);
     if (time.tv_nsec < init_time->tv_nsec) {
-        time.tv_sec  -= 1;
+        time.tv_sec -= 1;
         time.tv_nsec += 1000000000;
     }
-    return uint_fast64_t(time.tv_sec - init_time->tv_sec) *
-        1000000000 + (time.tv_nsec - init_time->tv_nsec);
+    return uint_fast64_t(time.tv_sec - init_time->tv_sec) * 1000000000 + (time.tv_nsec - init_time->tv_nsec);
 }
 
 double Timer::calc_elapsed_seconds(uint_fast64_t ticks) const
@@ -143,13 +175,13 @@ std::string Timer::format(double seconds)
 }
 
 namespace {
-    // FIXME: This should be std::llround once we switch to >= C++11.
-    int64_t round_to_int64(double x)
-    {
-        // FIXME: Assumes x >= 0.
-        // FIXME: The adding of 0.5 is error-prone, see: http://blog.frama-c.com/index.php?post/2013/05/02/nearbyintf1
-        return static_cast<int64_t>(x + 0.5);
-    }
+// FIXME: This should be std::llround once we switch to >= C++11.
+int64_t round_to_int64(double x)
+{
+    // FIXME: Assumes x >= 0.
+    // FIXME: The adding of 0.5 is error-prone, see: http://blog.frama-c.com/index.php?post/2013/05/02/nearbyintf1
+    return static_cast<int64_t>(x + 0.5);
+}
 }
 
 
@@ -158,7 +190,7 @@ void Timer::format(double seconds_float, std::ostream& out)
     int64_t rounded_minutes = round_to_int64(seconds_float / 60);
     if (rounded_minutes > 60) {
         // 1h0m -> inf
-        int64_t hours   = rounded_minutes / 60;
+        int64_t hours = rounded_minutes / 60;
         int64_t minutes = rounded_minutes % 60;
         out << hours << "h" << minutes << "m";
     }

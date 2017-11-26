@@ -1,22 +1,21 @@
 /*************************************************************************
  *
- * REALM CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] Realm Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of Realm Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to Realm Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from Realm Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
+
 #ifndef REALM_ARRAY_BASIC_TPL_HPP
 #define REALM_ARRAY_BASIC_TPL_HPP
 
@@ -29,99 +28,132 @@
 
 namespace realm {
 
-template<class T>
-inline BasicArray<T>::BasicArray(Allocator& alloc) REALM_NOEXCEPT:
-    Array(alloc)
+template <class T>
+inline BasicArray<T>::BasicArray(Allocator& allocator) noexcept
+    : Array(allocator)
 {
 }
 
-template<class T>
-inline BasicArray<T>::BasicArray(no_prealloc_tag) REALM_NOEXCEPT:
-    Array(no_prealloc_tag())
+template <class T>
+inline MemRef BasicArray<T>::create_array(size_t init_size, Allocator& allocator)
 {
-}
-
-
-template<class T>
-inline MemRef BasicArray<T>::create_array(std::size_t size, Allocator& alloc)
-{
-    std::size_t byte_size_0 = calc_aligned_byte_size(size); // Throws
+    size_t byte_size_0 = calc_aligned_byte_size(init_size); // Throws
     // Adding zero to Array::initial_capacity to avoid taking the
     // address of that member
-    std::size_t byte_size = std::max(byte_size_0, Array::initial_capacity+0); // Throws
+    size_t byte_size = std::max(byte_size_0, Array::initial_capacity + 0); // Throws
 
-    MemRef mem = alloc.alloc(byte_size); // Throws
+    MemRef mem = allocator.alloc(byte_size); // Throws
 
     bool is_inner_bptree_node = false;
     bool has_refs = false;
     bool context_flag = false;
-    int width = sizeof (T);
-    init_header(mem.m_addr, is_inner_bptree_node, has_refs, context_flag, wtype_Multiply,
-                width, size, byte_size);
+    int width = sizeof(T);
+    init_header(mem.get_addr(), is_inner_bptree_node, has_refs, context_flag, wtype_Multiply, width, init_size,
+                byte_size);
 
     return mem;
 }
 
 
-template<class T>
-inline void BasicArray<T>::create()
+template <class T>
+inline MemRef BasicArray<T>::create_array(Array::Type type, bool context_flag, size_t init_size, T value,
+                                          Allocator& allocator)
 {
-    std::size_t size = 0;
-    MemRef mem = create_array(size, get_alloc()); // Throws
+    REALM_ASSERT(type == Array::type_Normal);
+    REALM_ASSERT(!context_flag);
+    MemRef mem = create_array(init_size, allocator);
+    if (init_size) {
+        BasicArray<T> tmp(allocator);
+        tmp.init_from_mem(mem);
+        T* p = reinterpret_cast<T*>(tmp.m_data);
+        T* end = p + init_size;
+        while (p < end) {
+            *p++ = value;
+        }
+    }
+    return mem;
+}
+
+
+template <class T>
+inline void BasicArray<T>::create(Array::Type type, bool context_flag)
+{
+    REALM_ASSERT(type == Array::type_Normal);
+    REALM_ASSERT(!context_flag);
+    size_t length = 0;
+    MemRef mem = create_array(length, get_alloc()); // Throws
     init_from_mem(mem);
 }
 
 
-template<class T>
-MemRef BasicArray<T>::slice(std::size_t offset, std::size_t size, Allocator& target_alloc) const
+template <class T>
+MemRef BasicArray<T>::slice(size_t offset, size_t slice_size, Allocator& target_alloc) const
 {
     REALM_ASSERT(is_attached());
 
     // FIXME: This can be optimized as a single contiguous copy
     // operation.
-    BasicArray slice(target_alloc);
-    _impl::ShallowArrayDestroyGuard dg(&slice);
-    slice.create(); // Throws
+    BasicArray array_slice(target_alloc);
+    _impl::ShallowArrayDestroyGuard dg(&array_slice);
+    array_slice.create(); // Throws
     size_t begin = offset;
-    size_t end   = offset + size;
+    size_t end = offset + slice_size;
     for (size_t i = begin; i != end; ++i) {
         T value = get(i);
-        slice.add(value); // Throws
+        array_slice.add(value); // Throws
     }
     dg.release();
-    return slice.get_mem();
+    return array_slice.get_mem();
+}
+
+template <class T>
+MemRef BasicArray<T>::slice_and_clone_children(size_t offset, size_t slice_size, Allocator& target_alloc) const
+{
+    // BasicArray<T> never contains refs, so never has children.
+    return slice(offset, slice_size, target_alloc);
 }
 
 
-template<class T>
+template <class T>
 inline void BasicArray<T>::add(T value)
 {
     insert(m_size, value);
 }
 
 
-template<class T> inline T BasicArray<T>::get(std::size_t ndx) const REALM_NOEXCEPT
+template <class T>
+inline T BasicArray<T>::get(size_t ndx) const noexcept
 {
     return *(reinterpret_cast<const T*>(m_data) + ndx);
 }
 
 
-template<class T>
-inline T BasicArray<T>::get(const char* header, std::size_t ndx) REALM_NOEXCEPT
+template <class T>
+inline bool BasicArray<T>::is_null(size_t ndx) const noexcept
+{
+    // FIXME: This assumes BasicArray will only ever be instantiated for float-like T.
+    static_assert(realm::is_any<T, float, double>::value, "T can only be float or double");
+    auto x = get(ndx);
+    return null::is_null_float(x);
+}
+
+
+template <class T>
+inline T BasicArray<T>::get(const char* header, size_t ndx) noexcept
 {
     const char* data = get_data_from_header(header);
-    // FIXME: This casting assumes that T can be aliged on an 8-bype
-    // boundary (since data is aligned on an 8-byte boundary.) This
-    // restricts portability. The same problem recurs several times in
-    // the remainder of this file.
+    // This casting assumes that T can be aliged on an 8-bype
+    // boundary (since data is aligned on an 8-byte boundary.)
     return *(reinterpret_cast<const T*>(data) + ndx);
 }
 
 
-template<class T>
-inline void BasicArray<T>::set(std::size_t ndx, T value)
+template <class T>
+inline void BasicArray<T>::set(size_t ndx, T value)
 {
     REALM_ASSERT_3(ndx, <, m_size);
+    if (get(ndx) == value)
+        return;
 
     // Check if we need to copy before modifying
     copy_on_write(); // Throws
@@ -131,8 +163,15 @@ inline void BasicArray<T>::set(std::size_t ndx, T value)
     *data = value;
 }
 
-template<class T>
-void BasicArray<T>::insert(std::size_t ndx, T value)
+template <class T>
+inline void BasicArray<T>::set_null(size_t ndx)
+{
+    // FIXME: This assumes BasicArray will only ever be instantiated for float-like T.
+    set(ndx, null::get_null_float<T>());
+}
+
+template <class T>
+void BasicArray<T>::insert(size_t ndx, T value)
 {
     REALM_ASSERT_3(ndx, <=, m_size);
 
@@ -140,14 +179,13 @@ void BasicArray<T>::insert(std::size_t ndx, T value)
     copy_on_write(); // Throws
 
     // Make room for the new value
-    alloc(m_size+1, m_width); // Throws
+    alloc(m_size + 1, m_width); // Throws
 
     // Move values below insertion
     if (ndx != m_size) {
-        char* base = reinterpret_cast<char*>(m_data);
-        char* src_begin = base + ndx*m_width;
-        char* src_end   = base + m_size*m_width;
-        char* dst_end   = src_end + m_width;
+        char* src_begin = m_data + ndx * m_width;
+        char* src_end = m_data + m_size * m_width;
+        char* dst_end = src_end + m_width;
         std::copy_backward(src_begin, src_end, dst_end);
     }
 
@@ -155,11 +193,11 @@ void BasicArray<T>::insert(std::size_t ndx, T value)
     T* data = reinterpret_cast<T*>(m_data) + ndx;
     *data = value;
 
-     ++m_size;
+    ++m_size;
 }
 
-template<class T>
-void BasicArray<T>::erase(std::size_t ndx)
+template <class T>
+void BasicArray<T>::erase(size_t ndx)
 {
     REALM_ASSERT_3(ndx, <, m_size);
 
@@ -167,12 +205,11 @@ void BasicArray<T>::erase(std::size_t ndx)
     copy_on_write(); // Throws
 
     // move data under deletion up
-    if (ndx < m_size-1) {
-        char* base = reinterpret_cast<char*>(m_data);
-        char* dst_begin = base + ndx*m_width;
+    if (ndx < m_size - 1) {
+        char* dst_begin = m_data + ndx * m_width;
         const char* src_begin = dst_begin + m_width;
-        const char* src_end   = base + m_size*m_width;
-        std::copy(src_begin, src_end, dst_begin);
+        const char* src_end = m_data + m_size * m_width;
+        realm::safe_copy_n(src_begin, src_end - src_begin, dst_begin);
     }
 
     // Update size (also in header)
@@ -180,25 +217,27 @@ void BasicArray<T>::erase(std::size_t ndx)
     set_header_size(m_size);
 }
 
-template<class T> void BasicArray<T>::truncate(std::size_t size)
+template <class T>
+void BasicArray<T>::truncate(size_t to_size)
 {
     REALM_ASSERT(is_attached());
-    REALM_ASSERT_3(size, <=, m_size);
+    REALM_ASSERT_3(to_size, <=, m_size);
 
     copy_on_write(); // Throws
 
     // Update size in accessor and in header. This leaves the capacity
     // unchanged.
-    m_size = size;
-    set_header_size(size);
+    m_size = to_size;
+    set_header_size(to_size);
 }
 
-template<class T> inline void BasicArray<T>::clear()
+template <class T>
+inline void BasicArray<T>::clear()
 {
     truncate(0); // Throws
 }
 
-template<class T>
+template <class T>
 bool BasicArray<T>::compare(const BasicArray<T>& a) const
 {
     size_t n = size();
@@ -206,64 +245,61 @@ bool BasicArray<T>::compare(const BasicArray<T>& a) const
         return false;
     const T* data_1 = reinterpret_cast<const T*>(m_data);
     const T* data_2 = reinterpret_cast<const T*>(a.m_data);
-    return std::equal(data_1, data_1+n, data_2);
+    return realm::safe_equal(data_1, data_1 + n, data_2);
 }
 
 
-template<class T>
-std::size_t BasicArray<T>::CalcByteLen(std::size_t size, std::size_t) const
+template <class T>
+size_t BasicArray<T>::calc_byte_len(size_t for_size, size_t) const
 {
     // FIXME: Consider calling `calc_aligned_byte_size(size)`
-    // instead. Note however, that CalcByteLen() is supposed to return
+    // instead. Note however, that calc_byte_len() is supposed to return
     // the unaligned byte size. It is probably the case that no harm
     // is done by returning the aligned version, and most callers of
-    // CalcByteLen() will actually benefit if CalcByteLen() was
+    // calc_byte_len() will actually benefit if calc_byte_len() was
     // changed to always return the aligned byte size.
-    return header_size + size * sizeof (T); // FIXME: Prone to overflow
+    return header_size + for_size * sizeof(T);
 }
 
-template<class T>
-std::size_t BasicArray<T>::CalcItemCount(std::size_t bytes, std::size_t) const REALM_NOEXCEPT
+template <class T>
+size_t BasicArray<T>::calc_item_count(size_t bytes, size_t) const noexcept
 {
-    // FIXME: ??? what about width = 0? return -1?
-
-    std::size_t bytes_without_header = bytes - header_size;
-    return bytes_without_header / sizeof (T);
+    size_t bytes_without_header = bytes - header_size;
+    return bytes_without_header / sizeof(T);
 }
 
-template<class T>
-std::size_t BasicArray<T>::find(T value, std::size_t begin, std::size_t end) const
+template <class T>
+size_t BasicArray<T>::find(T value, size_t begin, size_t end) const
 {
     if (end == npos)
         end = m_size;
     REALM_ASSERT(begin <= m_size && end <= m_size && begin <= end);
     const T* data = reinterpret_cast<const T*>(m_data);
     const T* i = std::find(data + begin, data + end, value);
-    return i == data + end ? not_found : std::size_t(i - data);
+    return i == data + end ? not_found : size_t(i - data);
 }
 
-template<class T>
-inline std::size_t BasicArray<T>::find_first(T value, std::size_t begin, std::size_t end) const
+template <class T>
+inline size_t BasicArray<T>::find_first(T value, size_t begin, size_t end) const
 {
     return this->find(value, begin, end);
 }
 
-template<class T>
-void BasicArray<T>::find_all(Column* result, T value, std::size_t add_offset,
-                             std::size_t begin, std::size_t end) const
+template <class T>
+void BasicArray<T>::find_all(IntegerColumn* result, T value, size_t add_offset, size_t begin, size_t end) const
 {
-    std::size_t first = begin - 1;
+    size_t first = begin - 1;
     for (;;) {
         first = this->find(value, first + 1, end);
         if (first == not_found)
-            break;            
+            break;
 
         Array::add_to_column(result, first + add_offset);
     }
 }
 
-template<class T>
-std::size_t BasicArray<T>::count(T value, std::size_t begin, std::size_t end) const
+template <class T>
+size_t BasicArray<T>::count(T value, size_t begin, size_t end) const
 {
     if (end == npos)
         end = m_size;
@@ -274,8 +310,8 @@ std::size_t BasicArray<T>::count(T value, std::size_t begin, std::size_t end) co
 
 #if 0
 // currently unused
-template<class T>
-double BasicArray<T>::sum(std::size_t begin, std::size_t end) const
+template <class T>
+double BasicArray<T>::sum(size_t begin, size_t end) const
 {
     if (end == npos)
         end = m_size;
@@ -285,8 +321,9 @@ double BasicArray<T>::sum(std::size_t begin, std::size_t end) const
 }
 #endif
 
-template<class T> template<bool find_max>
-bool BasicArray<T>::minmax(T& result, std::size_t begin, std::size_t end) const
+template <class T>
+template <bool find_max>
+bool BasicArray<T>::minmax(T& result, size_t begin, size_t end) const
 {
     if (end == npos)
         end = m_size;
@@ -305,20 +342,20 @@ bool BasicArray<T>::minmax(T& result, std::size_t begin, std::size_t end) const
     return true;
 }
 
-template<class T>
-bool BasicArray<T>::maximum(T& result, std::size_t begin, std::size_t end) const
+template <class T>
+bool BasicArray<T>::maximum(T& result, size_t begin, size_t end) const
 {
     return minmax<true>(result, begin, end);
 }
 
-template<class T>
-bool BasicArray<T>::minimum(T& result, std::size_t begin, std::size_t end) const
+template <class T>
+bool BasicArray<T>::minimum(T& result, size_t begin, size_t end) const
 {
     return minmax<false>(result, begin, end);
 }
 
 
-template<class T>
+template <class T>
 ref_type BasicArray<T>::bptree_leaf_insert(size_t ndx, T value, TreeInsertBase& state)
 {
     size_t leaf_size = size();
@@ -350,39 +387,40 @@ ref_type BasicArray<T>::bptree_leaf_insert(size_t ndx, T value, TreeInsertBase& 
     return new_leaf.get_ref();
 }
 
-template<class T>
-inline std::size_t BasicArray<T>::lower_bound(T value) const REALM_NOEXCEPT
+template <class T>
+inline size_t BasicArray<T>::lower_bound(T value) const noexcept
 {
     const T* begin = reinterpret_cast<const T*>(m_data);
     const T* end = begin + size();
     return std::lower_bound(begin, end, value) - begin;
 }
 
-template<class T>
-inline std::size_t BasicArray<T>::upper_bound(T value) const REALM_NOEXCEPT
+template <class T>
+inline size_t BasicArray<T>::upper_bound(T value) const noexcept
 {
     const T* begin = reinterpret_cast<const T*>(m_data);
     const T* end = begin + size();
     return std::upper_bound(begin, end, value) - begin;
 }
 
-template<class T>
-inline std::size_t BasicArray<T>::calc_aligned_byte_size(std::size_t size)
+template <class T>
+inline size_t BasicArray<T>::calc_aligned_byte_size(size_t size)
 {
-    std::size_t max = std::numeric_limits<std::size_t>::max();
-    std::size_t max_2 = max & ~size_t(7); // Allow for upwards 8-byte alignment
-    if (size > (max_2 - header_size) / sizeof (T))
+    size_t max = std::numeric_limits<size_t>::max();
+    size_t max_2 = max & ~size_t(7); // Allow for upwards 8-byte alignment
+    if (size > (max_2 - header_size) / sizeof(T))
         throw std::runtime_error("Byte size overflow");
-    size_t byte_size = header_size + size * sizeof (T);
+    size_t byte_size = header_size + size * sizeof(T);
     REALM_ASSERT_3(byte_size, >, 0);
-    size_t aligned_byte_size = ((byte_size-1) | 7) + 1; // 8-byte alignment
+    size_t aligned_byte_size = ((byte_size - 1) | 7) + 1; // 8-byte alignment
     return aligned_byte_size;
 }
 
 
 #ifdef REALM_DEBUG
 
-template<class T>
+// LCOV_EXCL_START
+template <class T>
 void BasicArray<T>::to_dot(std::ostream& out, StringData title) const
 {
     ref_type ref = get_ref();
@@ -401,8 +439,8 @@ void BasicArray<T>::to_dot(std::ostream& out, StringData title) const
     out << "</FONT></TD>\n";
 
     // Values
-    std::size_t n = m_size;
-    for (std::size_t i = 0; i != n; ++i)
+    size_t n = m_size;
+    for (size_t i = 0; i != n; ++i)
         out << "<TD>" << get(i) << "</TD>\n";
 
     out << "</TR></TABLE>>];\n";
@@ -412,6 +450,7 @@ void BasicArray<T>::to_dot(std::ostream& out, StringData title) const
 
     to_dot_parent_edge(out);
 }
+// LCOV_EXCL_STOP
 
 #endif // REALM_DEBUG
 

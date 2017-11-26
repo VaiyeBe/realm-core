@@ -1,20 +1,18 @@
 /*************************************************************************
  *
- * REALM CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] Realm Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of Realm Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to Realm Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from Realm Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
 
@@ -32,42 +30,51 @@ namespace _impl {
 /// when the guard is destroyed. For arrays (`T` = `Array`) this means
 /// that the array is destroyed in a shallow fashion. See
 /// `DeepArrayDestroyGuard` for an alternative.
-template<class T> class DestroyGuard {
+template <class T>
+class DestroyGuard {
 public:
-    DestroyGuard() REALM_NOEXCEPT;
+    DestroyGuard() noexcept;
 
-    DestroyGuard(T*) REALM_NOEXCEPT;
+    DestroyGuard(T*) noexcept;
 
-    ~DestroyGuard() REALM_NOEXCEPT;
+    ~DestroyGuard() noexcept;
 
-    void reset(T*) REALM_NOEXCEPT;
+    // Default implementations of copy/assign can trigger multiple destructions
+    DestroyGuard(const DestroyGuard&) = delete;
+    DestroyGuard& operator=(const DestroyGuard&) = delete;
 
-    T* get() const REALM_NOEXCEPT;
+    void reset(T*) noexcept;
 
-    T* release() REALM_NOEXCEPT;
+    T* get() const noexcept;
+
+    T* release() noexcept;
 
 private:
     T* m_ptr;
 };
 
-typedef DestroyGuard<Array> ShallowArrayDestroyGuard;
+using ShallowArrayDestroyGuard = DestroyGuard<Array>;
 
 
 /// Calls `ptr->destroy_deep()` if the guarded Array pointer (`ptr`)
 /// is not null when the guard is destroyed.
 class DeepArrayDestroyGuard {
 public:
-    DeepArrayDestroyGuard() REALM_NOEXCEPT;
+    DeepArrayDestroyGuard() noexcept;
 
-    DeepArrayDestroyGuard(Array*) REALM_NOEXCEPT;
+    DeepArrayDestroyGuard(Array*) noexcept;
 
-    ~DeepArrayDestroyGuard() REALM_NOEXCEPT;
+    ~DeepArrayDestroyGuard() noexcept;
 
-    void reset(Array*) REALM_NOEXCEPT;
+    // Default implementations of copy/assign can trigger multiple destructions
+    DeepArrayDestroyGuard(const DeepArrayDestroyGuard&) = delete;
+    DeepArrayDestroyGuard& operator=(const DeepArrayDestroyGuard&) = delete;
 
-    Array* get() const REALM_NOEXCEPT;
+    void reset(Array*) noexcept;
 
-    Array* release() REALM_NOEXCEPT;
+    Array* get() const noexcept;
+
+    Array* release() noexcept;
 
 private:
     Array* m_ptr;
@@ -78,17 +85,21 @@ private:
 /// (`ref`) is not zero when the guard is destroyed.
 class DeepArrayRefDestroyGuard {
 public:
-    DeepArrayRefDestroyGuard(Allocator&) REALM_NOEXCEPT;
+    DeepArrayRefDestroyGuard(Allocator&) noexcept;
 
-    DeepArrayRefDestroyGuard(ref_type, Allocator&) REALM_NOEXCEPT;
+    DeepArrayRefDestroyGuard(ref_type, Allocator&) noexcept;
 
-    ~DeepArrayRefDestroyGuard() REALM_NOEXCEPT;
+    ~DeepArrayRefDestroyGuard() noexcept;
 
-    void reset(ref_type) REALM_NOEXCEPT;
+    // Default implementations of copy/assign can trigger multiple destructions
+    DeepArrayRefDestroyGuard(const DeepArrayRefDestroyGuard&) = delete;
+    DeepArrayRefDestroyGuard& operator=(const DeepArrayRefDestroyGuard&) = delete;
 
-    ref_type get() const REALM_NOEXCEPT;
+    void reset(ref_type) noexcept;
 
-    ref_type release() REALM_NOEXCEPT;
+    ref_type get() const noexcept;
+
+    ref_type release() noexcept;
 
 private:
     ref_type m_ref;
@@ -96,121 +107,123 @@ private:
 };
 
 
-
-
-
 // Implementation:
 
 // DestroyGuard<T>
 
-template<class T> inline DestroyGuard<T>::DestroyGuard() REALM_NOEXCEPT:
-    m_ptr(0)
+template <class T>
+inline DestroyGuard<T>::DestroyGuard() noexcept
+    : m_ptr(nullptr)
 {
 }
 
-template<class T> inline DestroyGuard<T>::DestroyGuard(T* ptr) REALM_NOEXCEPT:
-    m_ptr(ptr)
+template <class T>
+inline DestroyGuard<T>::DestroyGuard(T* ptr) noexcept
+    : m_ptr(ptr)
 {
 }
 
-template<class T> inline DestroyGuard<T>::~DestroyGuard() REALM_NOEXCEPT
+template <class T>
+inline DestroyGuard<T>::~DestroyGuard() noexcept
 {
     if (m_ptr)
         m_ptr->destroy();
 }
 
-template<class T> inline void DestroyGuard<T>::reset(T* ptr) REALM_NOEXCEPT
+template <class T>
+inline void DestroyGuard<T>::reset(T* ptr) noexcept
 {
     if (m_ptr)
         m_ptr->destroy();
     m_ptr = ptr;
 }
 
-template<class T> inline T* DestroyGuard<T>::get() const REALM_NOEXCEPT
+template <class T>
+inline T* DestroyGuard<T>::get() const noexcept
 {
     return m_ptr;
 }
 
-template<class T> inline T* DestroyGuard<T>::release() REALM_NOEXCEPT
+template <class T>
+inline T* DestroyGuard<T>::release() noexcept
 {
     T* ptr = m_ptr;
-    m_ptr = 0;
+    m_ptr = nullptr;
     return ptr;
 }
 
 
 // DeepArrayDestroyGuard
 
-inline DeepArrayDestroyGuard::DeepArrayDestroyGuard() REALM_NOEXCEPT:
-    m_ptr(0)
+inline DeepArrayDestroyGuard::DeepArrayDestroyGuard() noexcept
+    : m_ptr(nullptr)
 {
 }
 
-inline DeepArrayDestroyGuard::DeepArrayDestroyGuard(Array* ptr) REALM_NOEXCEPT:
-    m_ptr(ptr)
+inline DeepArrayDestroyGuard::DeepArrayDestroyGuard(Array* ptr) noexcept
+    : m_ptr(ptr)
 {
 }
 
-inline DeepArrayDestroyGuard::~DeepArrayDestroyGuard() REALM_NOEXCEPT
+inline DeepArrayDestroyGuard::~DeepArrayDestroyGuard() noexcept
 {
     if (m_ptr)
         m_ptr->destroy_deep();
 }
 
-inline void DeepArrayDestroyGuard::reset(Array* ptr) REALM_NOEXCEPT
+inline void DeepArrayDestroyGuard::reset(Array* ptr) noexcept
 {
     if (m_ptr)
         m_ptr->destroy_deep();
     m_ptr = ptr;
 }
 
-inline Array* DeepArrayDestroyGuard::get() const REALM_NOEXCEPT
+inline Array* DeepArrayDestroyGuard::get() const noexcept
 {
     return m_ptr;
 }
 
-inline Array* DeepArrayDestroyGuard::release() REALM_NOEXCEPT
+inline Array* DeepArrayDestroyGuard::release() noexcept
 {
     Array* ptr = m_ptr;
-    m_ptr = 0;
+    m_ptr = nullptr;
     return ptr;
 }
 
 
 // DeepArrayRefDestroyGuard
 
-inline DeepArrayRefDestroyGuard::DeepArrayRefDestroyGuard(Allocator& alloc) REALM_NOEXCEPT:
-    m_ref(0),
-    m_alloc(alloc)
+inline DeepArrayRefDestroyGuard::DeepArrayRefDestroyGuard(Allocator& alloc) noexcept
+    : m_ref(0)
+    , m_alloc(alloc)
 {
 }
 
-inline DeepArrayRefDestroyGuard::DeepArrayRefDestroyGuard(ref_type ref,
-                                                          Allocator& alloc) REALM_NOEXCEPT:
-    m_ref(ref),
-    m_alloc(alloc)
+inline DeepArrayRefDestroyGuard::DeepArrayRefDestroyGuard(ref_type ref, Allocator& alloc) noexcept
+    : m_ref(ref)
+    , m_alloc(alloc)
 {
 }
 
-inline DeepArrayRefDestroyGuard::~DeepArrayRefDestroyGuard() REALM_NOEXCEPT
+inline DeepArrayRefDestroyGuard::~DeepArrayRefDestroyGuard() noexcept
 {
     if (m_ref)
         Array::destroy_deep(m_ref, m_alloc);
 }
 
-inline void DeepArrayRefDestroyGuard::reset(ref_type ref) REALM_NOEXCEPT
+inline void DeepArrayRefDestroyGuard::reset(ref_type ref) noexcept
 {
     if (m_ref)
         Array::destroy_deep(m_ref, m_alloc);
     m_ref = ref;
 }
 
-inline ref_type DeepArrayRefDestroyGuard::get() const REALM_NOEXCEPT
+inline ref_type DeepArrayRefDestroyGuard::get() const noexcept
 {
     return m_ref;
 }
 
-inline ref_type DeepArrayRefDestroyGuard::release() REALM_NOEXCEPT
+inline ref_type DeepArrayRefDestroyGuard::release() noexcept
 {
     ref_type ref = m_ref;
     m_ref = 0;

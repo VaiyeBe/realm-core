@@ -1,3 +1,21 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include <algorithm>
 
 #include "verified_string.hpp"
@@ -6,8 +24,8 @@ using namespace realm;
 using namespace realm::test_util;
 
 
-VerifiedString::VerifiedString():
-    u(Allocator::get_default(), AdaptiveStringColumn::create(Allocator::get_default()))
+VerifiedString::VerifiedString()
+    : u(Allocator::get_default(), StringColumn::create(Allocator::get_default()))
 {
 }
 
@@ -66,7 +84,7 @@ void VerifiedString::set(size_t ndx, StringData value)
 void VerifiedString::erase(size_t ndx)
 {
     v.erase(v.begin() + ndx);
-    u.erase(ndx, ndx + 1 == u.size());
+    u.erase(ndx);
     REALM_ASSERT(v.size() == u.size());
     verify_neighbours(ndx);
     REALM_ASSERT(conditional_verify());
@@ -97,7 +115,7 @@ size_t VerifiedString::size()
 }
 
 // todo/fixme, end ignored
-void VerifiedString::find_all(Column& c, StringData value, size_t start, size_t end)
+void VerifiedString::find_all(IntegerColumn& c, StringData value, size_t start, size_t end)
 {
     std::vector<std::string>::iterator ita = v.begin() + start;
     std::vector<std::string>::iterator itb = v.begin() + (end == size_t(-1) ? v.size() : end);
@@ -125,7 +143,7 @@ void VerifiedString::find_all(Column& c, StringData value, size_t start, size_t 
     return;
 }
 
-bool VerifiedString::Verify()
+bool VerifiedString::verify()
 {
     REALM_ASSERT(u.size() == v.size());
     if (u.size() != v.size())
@@ -142,8 +160,8 @@ bool VerifiedString::Verify()
 // makes it run amortized the same time complexity as original, even though the row count grows
 bool VerifiedString::conditional_verify()
 {
-    if ((uint64_t(rand()) * uint64_t(rand()))  % (v.size() / 10 + 1) == 0) {
-        return Verify();
+    if ((uint64_t(rand()) * uint64_t(rand())) % (v.size() / 10 + 1) == 0) {
+        return verify();
     }
     else {
         return true;

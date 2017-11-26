@@ -1,468 +1,92 @@
 /*************************************************************************
  *
- * REALM CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] Realm Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of Realm Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to Realm Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from Realm Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
 
-#ifndef _WIN32
+#include <realm/util/features.h>
 
-#include "file_mapper.hpp"
+#include <realm/util/file_mapper.hpp>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <cerrno>
 #include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #include <realm/util/errno.hpp>
+#include <realm/util/to_string.hpp>
+#include <realm/exceptions.hpp>
 
-#ifdef REALM_ENABLE_ENCRYPTION
+#if REALM_ENABLE_ENCRYPTION
 
-#include "encrypted_file_mapping.hpp"
+#include <realm/util/encrypted_file_mapping.hpp>
+#include <realm/util/aes_cryptor.hpp>
 
 #include <memory>
-#include <signal.h>
+#include <csignal>
 #include <sys/stat.h>
-#include <unistd.h>
-#include <string.h>
+#include <cstring>
 #include <atomic>
 
+#include <realm/util/file.hpp>
 #include <realm/util/errno.hpp>
 #include <realm/util/shared_ptr.hpp>
 #include <realm/util/terminate.hpp>
 #include <realm/util/thread.hpp>
-#include <string.h> // for memset
+#include <cstring> // for memset
 
-#ifdef __APPLE__
-#   include <mach/mach.h>
-#   include <mach/exc.h>
+#if REALM_PLATFORM_APPLE
+#include <mach/mach.h>
+#include <mach/exc.h>
 #endif
 
-#ifdef REALM_ANDROID
+#if REALM_ANDROID
 #include <linux/unistd.h>
 #include <sys/syscall.h>
 #endif
 
+#endif // enable encryption
+
+namespace {
+
+inline bool is_mmap_memory_error(int err)
+{
+    return (err == EAGAIN || err == EMFILE || err == ENOMEM);
+}
+
+} // Unnamed namespace
+
 using namespace realm;
 using namespace realm::util;
 
-namespace {
-bool handle_access(void *addr);
+namespace realm {
+namespace util {
 
-#ifdef __APPLE__
-
-#if defined(__x86_64__) || defined(__arm64__)
-typedef int64_t NativeCodeType;
-#define REALM_EXCEPTION_BEHAVIOR MACH_EXCEPTION_CODES|EXCEPTION_STATE_IDENTITY
-#else
-typedef int32_t NativeCodeType;
-#define REALM_EXCEPTION_BEHAVIOR EXCEPTION_STATE_IDENTITY
-#endif
-
-// These structures and the message IDs mostly defined by the .def files included
-// with the mach SDK, but parts of it are missing from the iOS SDK and on OS X
-// you can only see either the 32-bit or 64-bit versions at a time, but we need
-// both to be able to forward unhandled messages from our 64-bit handler to a
-// 32-bit handler
-
-#ifdef  __MigPackStructs
-#   pragma pack(4)
-#endif
-
-template<typename CodeType>
-struct ExceptionInfo {
-    NDR_record_t NDR;
-    exception_type_t exception;
-    mach_msg_type_number_t codeCnt;
-    CodeType code[2];
-};
-
-struct ExceptionSourceThread {
-    mach_msg_body_t body;
-    mach_msg_port_descriptor_t thread;
-    mach_msg_port_descriptor_t task;
-};
-
-struct ExceptionState {
-    int flavor;
-    mach_msg_type_number_t old_stateCnt;
-    natural_t old_state[224];
-};
-
-template<typename CodeType>
-struct RaiseRequest {
-    mach_msg_header_t head;
-    ExceptionSourceThread thread;
-    ExceptionInfo<CodeType> exception;
-
-    typedef int has_thread;
-};
-
-template<typename CodeType>
-struct RaiseStateRequest {
-    mach_msg_header_t head;
-    ExceptionInfo<CodeType> exception;
-    ExceptionState state;
-
-    typedef int has_state;
-};
-
-template<typename CodeType>
-struct RaiseStateIdentityRequest {
-    mach_msg_header_t head;
-    ExceptionSourceThread thread;
-    ExceptionInfo<CodeType> exception;
-    ExceptionState state;
-
-    typedef int has_thread;
-    typedef int has_state;
-};
-
-#ifdef  __MigPackStructs
-#   pragma pack()
-#endif
-
-enum MachExceptionMessageID {
-    msg_Request = 2401,
-    msg_RequestState = 2402,
-    msg_RequestStateIdentity = 2403
-};
-
-// Our exception port and the one we replaced which we will forward anything we
-// don't handle to
-mach_port_t exception_port = MACH_PORT_NULL;
-mach_port_t old_port = MACH_PORT_NULL;
-exception_behavior_t old_behavior;
-thread_state_flavor_t old_flavor;
-
-void check_error(kern_return_t kr)
-{
-    if (kr != KERN_SUCCESS)
-        REALM_TERMINATE(mach_error_string(kr));
-}
-
-void send_mach_msg(mach_msg_header_t *msg)
-{
-    kern_return_t kr = mach_msg(msg, MACH_SEND_MSG, msg->msgh_size,
-                                0, MACH_PORT_NULL, // no reply needed
-                                MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
-    check_error(kr);
-}
-
-// Construct and send a reply to the given message
-template<typename CodeType>
-void send_reply(const RaiseStateIdentityRequest<CodeType>& request, kern_return_t ret_code)
-{
-    __Reply__exception_raise_state_identity_t reply;
-    bzero(&reply, sizeof reply);
-
-    mach_msg_size_t state_size = request.state.old_stateCnt * sizeof request.state.old_state[0];
-    REALM_ASSERT_3(sizeof(reply.new_state), >=, state_size);
-
-    reply.Head.msgh_bits = MACH_MSGH_BITS(MACH_MSGH_BITS_REMOTE(request.head.msgh_bits), 0);
-    reply.Head.msgh_remote_port = request.head.msgh_remote_port;
-    reply.Head.msgh_id = request.head.msgh_id + 100; // msgid of replies is request+100
-    reply.NDR = request.exception.NDR;
-    reply.RetCode = ret_code;
-    reply.flavor = request.state.flavor;
-    reply.new_stateCnt = request.state.old_stateCnt;
-    memcpy(reply.new_state, request.state.old_state, state_size);
-
-    // subtract the unused portion of the state from the message size
-    reply.Head.msgh_size = sizeof reply - sizeof reply.new_state + state_size;
-
-    send_mach_msg(&reply.Head);
-}
-
-template<typename CodeType>
-void copy_state(const RaiseRequest<CodeType>&, const RaiseStateIdentityRequest<NativeCodeType>&)
-{
-    // RaiseRequest does not have state
-}
-
-template<template<typename> class ForwardType, typename ForwardCodeType>
-void copy_state(ForwardType<ForwardCodeType>& forward,
-                const RaiseStateIdentityRequest<NativeCodeType>& request,
-                typename ForwardType<ForwardCodeType>::has_state = 0)
-{
-    mach_msg_size_t state_size = request.state.old_stateCnt * sizeof request.state.old_state[0];
-    REALM_ASSERT_3(sizeof(forward.state.old_state), >=, state_size);
-
-    forward.state.flavor = old_flavor;
-    if (old_flavor == request.state.flavor) {
-        forward.state.old_stateCnt = request.state.old_stateCnt;
-        memcpy(forward.state.old_state, request.state.old_state, state_size);
-    }
-    else {
-        kern_return_t kr = thread_get_state(request.thread.thread.name,
-                                            old_flavor,
-                                            forward.state.old_state,
-                                            &forward.state.old_stateCnt);
-        check_error(kr);
-    }
-
-    forward.head.msgh_size -= sizeof request.state.old_state - state_size;
-}
-
-template<typename CodeType>
-void copy_thread(const RaiseStateRequest<CodeType>&, const RaiseStateIdentityRequest<NativeCodeType>&)
-{
-    // RaiseStateRequest does not have a thread
-}
-
-template<template<typename> class ForwardType, typename ForwardCodeType>
-void copy_thread(ForwardType<ForwardCodeType>& forward,
-                const RaiseStateIdentityRequest<NativeCodeType>& request,
-                typename ForwardType<ForwardCodeType>::has_thread = 0)
-{
-    forward.thread.body = request.thread.body;
-    forward.thread.thread = request.thread.thread;
-    forward.thread.task = request.thread.task;
-}
-
-template<template<typename> class ForwardType, typename ForwardCodeType>
-void convert_and_forward_message(const RaiseStateIdentityRequest<NativeCodeType>& request, MachExceptionMessageID msg)
-{
-    ForwardType<ForwardCodeType> forward;
-    forward.head = request.head;
-    forward.head.msgh_id = msg;
-    forward.head.msgh_size = sizeof forward;
-    forward.head.msgh_local_port = old_port;
-    forward.exception.NDR = request.exception.NDR;
-    forward.exception.exception = request.exception.exception;
-    forward.exception.codeCnt = request.exception.codeCnt;
-    forward.exception.code[0] = static_cast<ForwardCodeType>(request.exception.code[0]);
-    forward.exception.code[1] = static_cast<ForwardCodeType>(request.exception.code[1]);
-    copy_thread(forward, request);
-    copy_state(forward, request);
-
-    // The 64-bit IDs are offset 4 from the enum values (which are the 32-bit IDs)
-    if (sizeof forward.exception.code == 8)
-        forward.head.msgh_id += 4;
-
-    mach_msg_return_t mr = mach_msg(&forward.head,
-                                    MACH_SEND_MSG,
-                                    forward.head.msgh_size,
-                                    0,
-                                    MACH_PORT_NULL,
-                                    MACH_MSG_TIMEOUT_NONE,
-                                    MACH_PORT_NULL);
-    if (mr != MACH_MSG_SUCCESS) {
-        // Failed to message the old port, so just fall back to behaving as if
-        // there was no old port
-        send_reply(request, KERN_FAILURE);
-        return;
-    }
-}
-
-void handle_exception()
-{
-    // Wait for a message
-    RaiseStateIdentityRequest<NativeCodeType> request;
-    bzero(&request, sizeof request);
-    request.head.msgh_local_port = exception_port;
-    request.head.msgh_size = sizeof request;
-    mach_msg_return_t mr = mach_msg(&request.head,
-                                    MACH_RCV_MSG,
-                                    0, request.head.msgh_size,
-                                    exception_port,
-                                    MACH_MSG_TIMEOUT_NONE,
-                                    MACH_PORT_NULL);
-    check_error(mr);
-
-    if (request.exception.code[0] == KERN_PROTECTION_FAILURE) {
-        if (handle_access(reinterpret_cast<void*>(request.exception.code[1]))) {
-            // Tell the thread to retry the instruction that faulted and continue running
-            send_reply(request, KERN_SUCCESS);
-            return;
-        }
-    }
-
-    // We couldn't handle this error, so forward it on to the handler we replaced
-
-    if (old_port == MACH_PORT_NULL) {
-        // There is none, so just fail to handle the message
-        send_reply(request, KERN_FAILURE);
-        return;
-    }
-
-    // The old handler may have asked for messages in a different format from
-    // what we're using, so create a new message in that format and send it
-    switch (old_behavior) {
-        case EXCEPTION_DEFAULT:
-            convert_and_forward_message<RaiseRequest, int32_t>(request, msg_Request);
-            return;
-        case exception_behavior_t(EXCEPTION_DEFAULT | MACH_EXCEPTION_CODES):
-            convert_and_forward_message<RaiseRequest, int64_t>(request, msg_Request);
-            return;
-        case EXCEPTION_STATE:
-            convert_and_forward_message<RaiseStateRequest, int32_t>(request, msg_RequestState);
-            return;
-        case exception_behavior_t(EXCEPTION_STATE | MACH_EXCEPTION_CODES):
-            convert_and_forward_message<RaiseStateRequest, int64_t>(request, msg_RequestState);
-            return;
-        case EXCEPTION_STATE_IDENTITY:
-            convert_and_forward_message<RaiseStateRequest, int32_t>(request, msg_RequestStateIdentity);
-            return;
-        case exception_behavior_t(EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_CODES):
-            convert_and_forward_message<RaiseStateRequest, int64_t>(request, msg_RequestStateIdentity);
-            return;
-        default:
-            REALM_TERMINATE("Unsupported exception behavior");
-    }
-}
-
-void exception_handler_loop()
-{
-    while (true)
-        handle_exception();
-}
-
-void install_handler()
-{
-    static bool has_installed_handler = false;
-    if (has_installed_handler)
-        return;
-    has_installed_handler = true;
-
-    // Create a port and ask to be able to read from it
-    kern_return_t kr;
-    kr = mach_port_allocate(mach_task_self(),
-                            MACH_PORT_RIGHT_RECEIVE,
-                            &exception_port);
-    check_error(kr);
-
-    kr = mach_port_insert_right(mach_task_self(),
-                                exception_port, exception_port,
-                                MACH_MSG_TYPE_MAKE_SEND);
-    check_error(kr);
-
-    // Atomically set our port as the handler for EXC_BAD_ACCESS and read the
-    // old port so we can forward unhanlded errors to it
-    mach_msg_type_number_t old_count;
-    exception_mask_t old_mask;
-    kr = task_swap_exception_ports(mach_task_self(),
-                                   EXC_MASK_BAD_ACCESS,
-                                   exception_port,
-                                   REALM_EXCEPTION_BEHAVIOR,
-                                   MACHINE_THREAD_STATE,
-                                   &old_mask,
-                                   &old_count,
-                                   &old_port,
-                                   &old_behavior,
-                                   &old_flavor);
-    check_error(kr);
-    REALM_ASSERT_3(old_mask, ==, EXC_MASK_BAD_ACCESS);
-    REALM_ASSERT_3(old_count, ==, 1);
-
-    new Thread(exception_handler_loop);
-}
-
-#else // __APPLE__
-
-#if defined(REALM_ANDROID) && defined(__LP64__)
-// bionic's sigaction() is broken on arm64, so use the syscall directly
-int sigaction_wrapper(int signal, const struct sigaction* new_action, struct sigaction* old_action) {
-    __kernel_sigaction kernel_new_action;
-    kernel_new_action.sa_flags = new_action->sa_flags;
-    kernel_new_action.sa_handler = new_action->sa_handler;
-    kernel_new_action.sa_mask = new_action->sa_mask;
-
-    __kernel_sigaction kernel_old_action;
-    int result = syscall(__NR_rt_sigaction, signal, &kernel_new_action,
-                         &kernel_old_action, sizeof(sigset_t));
-    old_action->sa_flags = kernel_old_action.sa_flags;
-    old_action->sa_handler = kernel_old_action.sa_handler;
-    old_action->sa_mask = kernel_old_action.sa_mask;
-
-    return result;
-}
-#else
-#define sigaction_wrapper sigaction
-#endif
-
-// The signal handlers which our handlers replaced, if any, for forwarding
-// signals for segfaults outside of our encrypted pages
-struct sigaction old_segv;
-struct sigaction old_bus;
-
-void signal_handler(int code, siginfo_t* info, void* ctx)
-{
-    if (handle_access(info->si_addr))
-        return;
-
-    // forward unhandled signals
-    if (code == SIGSEGV) {
-        if (old_segv.sa_sigaction)
-            old_segv.sa_sigaction(code, info, ctx);
-        else if (old_segv.sa_handler)
-            old_segv.sa_handler(code);
-        else
-            REALM_TERMINATE("Segmentation fault");
-    }
-    else if (code == SIGBUS) {
-        if (old_bus.sa_sigaction)
-            old_bus.sa_sigaction(code, info, ctx);
-        else if (old_bus.sa_handler)
-            old_bus.sa_handler(code);
-        else
-            REALM_TERMINATE("Segmentation fault");
-    }
-    else
-        REALM_TERMINATE("Segmentation fault");
-}
-
-void install_handler()
-{
-    static bool has_installed_handler = false;
-    if (!has_installed_handler) {
-        has_installed_handler = true;
-
-        struct sigaction action;
-        memset(&action, 0, sizeof(action));
-        action.sa_sigaction = signal_handler;
-        action.sa_flags = SA_SIGINFO;
-
-        if (sigaction_wrapper(SIGSEGV, &action, &old_segv) != 0)
-            REALM_TERMINATE("sigaction SEGV failed");
-        if (sigaction_wrapper(SIGBUS, &action, &old_bus) != 0)
-            REALM_TERMINATE("sigaction SIGBUS");
-    }
-}
-
-#endif // __APPLE__
-
-class SpinLockGuard {
-public:
-    SpinLockGuard(std::atomic<bool>& lock) : m_lock(lock)
-    {
-        while (m_lock.exchange(true, std::memory_order_acquire)) ;
-    }
-
-    ~SpinLockGuard()
-    {
-        m_lock.store(false, std::memory_order_release);
-    }
-
-private:
-    std::atomic<bool>& m_lock;
-};
+#if REALM_ENABLE_ENCRYPTION
 
 // A list of all of the active encrypted mappings for a single file
 struct mappings_for_file {
+#ifdef _WIN32
+    HANDLE handle;
+#else
     dev_t device;
     ino_t inode;
+#endif
     SharedPtr<SharedFileInfo> info;
 };
 
@@ -475,35 +99,11 @@ struct mapping_and_addr {
     size_t size;
 };
 
-std::atomic<bool> mapping_lock;
-std::vector<mapping_and_addr> mappings_by_addr;
-std::vector<mappings_for_file> mappings_by_file;
+// prevent destruction at exit (which can lead to races if other threads are still running)
+util::Mutex& mapping_mutex = *new Mutex;
+std::vector<mapping_and_addr>& mappings_by_addr = *new std::vector<mapping_and_addr>;
+std::vector<mappings_for_file>& mappings_by_file = *new std::vector<mappings_for_file>;
 
-// If there's any active mappings when the program exits, deliberately leak them
-// to avoid flushing things that were in the middle of being modified on a different thrad
-struct AtExit {
-    ~AtExit()
-    {
-        if (!mappings_by_addr.empty())
-            (new std::vector<mapping_and_addr>)->swap(mappings_by_addr);
-        if (!mappings_by_file.empty())
-            (new std::vector<mappings_for_file>)->swap(mappings_by_file);
-    }
-} at_exit;
-
-bool handle_access(void *addr)
-{
-    SpinLockGuard lock(mapping_lock);
-    for (size_t i = 0; i < mappings_by_addr.size(); ++i) {
-        mapping_and_addr& m = mappings_by_addr[i];
-        if (m.addr > addr || static_cast<char*>(m.addr) + m.size <= addr)
-            continue;
-
-        m.mapping->handle_access(addr);
-        return true;
-    }
-    return false;
-}
 
 mapping_and_addr* find_mapping_for_addr(void* addr, size_t size)
 {
@@ -516,24 +116,33 @@ mapping_and_addr* find_mapping_for_addr(void* addr, size_t size)
     return 0;
 }
 
-void add_mapping(void* addr, size_t size, int fd, File::AccessMode access, const char* encryption_key)
+EncryptedFileMapping* add_mapping(void* addr, size_t size, FileDesc fd, size_t file_offset, File::AccessMode access,
+                                  const char* encryption_key)
 {
+#ifndef _WIN32
     struct stat st;
+
     if (fstat(fd, &st)) {
         int err = errno; // Eliminate any risk of clobbering
         throw std::runtime_error(get_errno_msg("fstat() failed: ", err));
     }
+#endif
 
-    if (st.st_size > 0 && static_cast<size_t>(st.st_size) < page_size())
+    size_t fs = to_size_t(File::get_size_static(fd));
+    if (fs > 0 && fs < page_size())
         throw DecryptionFailed();
 
-    SpinLockGuard lock(mapping_lock);
-    install_handler();
+    LockGuard lock(mapping_mutex);
 
     std::vector<mappings_for_file>::iterator it;
     for (it = mappings_by_file.begin(); it != mappings_by_file.end(); ++it) {
+#ifdef _WIN32
+        if (File::is_same_file_static(it->handle, fd))
+            break;
+#else
         if (it->inode == st.st_ino && it->device == st.st_dev)
             break;
+#endif
     }
 
     // Get the potential memory allocation out of the way so that mappings_by_addr.push_back can't throw
@@ -542,20 +151,38 @@ void add_mapping(void* addr, size_t size, int fd, File::AccessMode access, const
     if (it == mappings_by_file.end()) {
         mappings_by_file.reserve(mappings_by_file.size() + 1);
 
+#ifdef _WIN32
+        FileDesc fd2;
+        if (!DuplicateHandle(GetCurrentProcess(), fd, GetCurrentProcess(), &fd2, 0, FALSE, DUPLICATE_SAME_ACCESS))
+            throw std::runtime_error(get_errno_msg("DuplicateHandle() failed: ", GetLastError()));
+        fd = fd2;
+#else
         fd = dup(fd);
+
         if (fd == -1) {
             int err = errno; // Eliminate any risk of clobbering
             throw std::runtime_error(get_errno_msg("dup() failed: ", err));
         }
-
+#endif
         mappings_for_file f;
+
+#ifdef _WIN32
+        f.handle = fd;
+#else
         f.device = st.st_dev;
         f.inode = st.st_ino;
+#endif
+
         try {
             f.info = new SharedFileInfo(reinterpret_cast<const uint8_t*>(encryption_key), fd);
         }
         catch (...) {
+#ifdef _WIN32
+            bool b = CloseHandle(fd);
+            REALM_ASSERT_RELEASE(b);
+#else
             ::close(fd);
+#endif
             throw;
         }
 
@@ -567,12 +194,19 @@ void add_mapping(void* addr, size_t size, int fd, File::AccessMode access, const
         mapping_and_addr m;
         m.addr = addr;
         m.size = size;
-        m.mapping = new EncryptedFileMapping(*it->info, addr, size, access);
+        EncryptedFileMapping* m_ptr = new EncryptedFileMapping(*it->info, file_offset, addr, size, access);
+        m.mapping = m_ptr;
         mappings_by_addr.push_back(m); // can't throw due to reserve() above
+        return m_ptr;
     }
     catch (...) {
         if (it->info->mappings.empty()) {
+#ifdef _WIN32
+            bool b = CloseHandle(it->info->fd);
+            REALM_ASSERT_RELEASE(b);
+#else
             ::close(it->info->fd);
+#endif
             mappings_by_file.erase(it);
         }
         throw;
@@ -582,19 +216,25 @@ void add_mapping(void* addr, size_t size, int fd, File::AccessMode access, const
 void remove_mapping(void* addr, size_t size)
 {
     size = round_up_to_page_size(size);
-    SpinLockGuard lock(mapping_lock);
+    LockGuard lock(mapping_mutex);
     mapping_and_addr* m = find_mapping_for_addr(addr, size);
     if (!m)
         return;
 
     mappings_by_addr.erase(mappings_by_addr.begin() + (m - &mappings_by_addr[0]));
+
     for (std::vector<mappings_for_file>::iterator it = mappings_by_file.begin(); it != mappings_by_file.end(); ++it) {
         if (it->info->mappings.empty()) {
+#ifdef _WIN32
+            if (!CloseHandle(it->info->fd))
+                throw std::runtime_error(get_errno_msg("CloseHandle() failed: ", GetLastError()));
+#else
             if (::close(it->info->fd) != 0) {
-                int err = errno; // Eliminate any risk of clobbering
-                if (err == EBADF || err == EIO) // todo, how do we handle EINTR?
-                    throw std::runtime_error(get_errno_msg("close() failed: ", err));                
+                int err = errno;                // Eliminate any risk of clobbering
+                if (err == EBADF || err == EIO) // FIXME: how do we handle EINTR?
+                    throw std::runtime_error(get_errno_msg("close() failed: ", err));
             }
+#endif
             mappings_by_file.erase(it);
             break;
         }
@@ -603,42 +243,78 @@ void remove_mapping(void* addr, size_t size)
 
 void* mmap_anon(size_t size)
 {
-    void* addr = ::mmap(0, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+#ifdef _WIN32
+    HANDLE hMapFile;
+    LPCTSTR pBuf;
+
+    ULARGE_INTEGER s;
+    s.QuadPart = size;
+    
+    hMapFile = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, s.HighPart, s.LowPart, nullptr);
+    if (hMapFile == NULL) {
+        throw std::runtime_error(get_errno_msg("CreateFileMapping() failed: ", GetLastError()));
+    }
+
+    pBuf = (LPTSTR)MapViewOfFile(hMapFile, FILE_MAP_ALL_ACCESS, 0, 0, size);
+    if (pBuf == nullptr) {
+        throw std::runtime_error(get_errno_msg("MapViewOfFile() failed: ", GetLastError()));
+    }
+
+    CloseHandle(hMapFile);
+    return (void*)pBuf;
+#else
+    void* addr = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     if (addr == MAP_FAILED) {
         int err = errno; // Eliminate any risk of clobbering
-        throw std::runtime_error(get_errno_msg("mmap() failed: ", err));
+        if (is_mmap_memory_error(err)) {
+            throw AddressSpaceExhausted(get_errno_msg("mmap() failed: ", err) + " size: " + util::to_string(size));
+        }
+        throw std::runtime_error(get_errno_msg("mmap() failed: ", err) + "size: " + util::to_string(size) +
+                                 "offset is 0");
     }
     return addr;
+#endif
 }
 
-} // anonymous namespace
-#endif
-
-namespace realm {
-namespace util {
-
-#ifdef REALM_ENABLE_ENCRYPTION
-size_t round_up_to_page_size(size_t size) REALM_NOEXCEPT
+size_t round_up_to_page_size(size_t size) noexcept
 {
     return (size + page_size() - 1) & ~(page_size() - 1);
 }
-#endif
 
-void* mmap(int fd, size_t size, File::AccessMode access, const char* encryption_key)
+void* mmap(FileDesc fd, size_t size, File::AccessMode access, size_t offset, const char* encryption_key,
+           EncryptedFileMapping*& mapping)
 {
-#ifdef REALM_ENABLE_ENCRYPTION
     if (encryption_key) {
         size = round_up_to_page_size(size);
         void* addr = mmap_anon(size);
-        add_mapping(addr, size, fd, access, encryption_key);
+        mapping = add_mapping(addr, size, fd, offset, access, encryption_key);
+        return addr;
+    }
+    else {
+        mapping = nullptr;
+        return mmap(fd, size, access, offset, nullptr);
+    }
+}
+
+#endif // enable encryption
+
+
+void* mmap(FileDesc fd, size_t size, File::AccessMode access, size_t offset, const char* encryption_key)
+{
+#if REALM_ENABLE_ENCRYPTION
+    if (encryption_key) {
+        size = round_up_to_page_size(size);
+        void* addr = mmap_anon(size);
+        add_mapping(addr, size, fd, offset, access, encryption_key);
         return addr;
     }
     else
 #else
     REALM_ASSERT(!encryption_key);
-    static_cast<void>(encryption_key);
 #endif
     {
+
+#ifndef _WIN32
         int prot = PROT_READ;
         switch (access) {
             case File::access_ReadWrite:
@@ -648,31 +324,86 @@ void* mmap(int fd, size_t size, File::AccessMode access, const char* encryption_
                 break;
         }
 
-        void* addr = ::mmap(0, size, prot, MAP_SHARED, fd, 0);
+        void* addr = ::mmap(nullptr, size, prot, MAP_SHARED, fd, offset);
         if (addr != MAP_FAILED)
             return addr;
-    }
 
-    int err = errno; // Eliminate any risk of clobbering
-    throw std::runtime_error(get_errno_msg("mmap() failed: ", err));
+        int err = errno; // Eliminate any risk of clobbering
+        if (is_mmap_memory_error(err)) {
+            throw AddressSpaceExhausted(get_errno_msg("mmap() failed: ", err) + " size: " + util::to_string(size) +
+                                        " offset: " + util::to_string(offset));
+        }
+
+        throw std::runtime_error(get_errno_msg("mmap() failed: ", err) + "size: " + util::to_string(size) +
+                                 "offset: " + util::to_string(offset));
+
+#else
+        // FIXME: Is there anything that we must do on Windows to honor map_NoSync?
+
+        DWORD protect = PAGE_READONLY;
+        DWORD desired_access = FILE_MAP_READ;
+        switch (access) {
+            case File::access_ReadOnly:
+                break;
+            case File::access_ReadWrite:
+                protect = PAGE_READWRITE;
+                desired_access = FILE_MAP_WRITE;
+                break;
+        }
+        LARGE_INTEGER large_int;
+        if (int_cast_with_overflow_detect(offset + size, large_int.QuadPart))
+            throw std::runtime_error("Map size is too large");
+        HANDLE map_handle = CreateFileMappingFromApp(fd, 0, protect, offset + size, nullptr);
+        if (!map_handle)
+            throw AddressSpaceExhausted(get_errno_msg("CreateFileMapping() failed: ", GetLastError()) +
+                                        " size: " + util::to_string(size) + " offset: " + util::to_string(offset));
+
+        if (int_cast_with_overflow_detect(offset, large_int.QuadPart))
+            throw std::runtime_error("Map offset is too large");
+
+        SIZE_T _size = size;
+        void* addr = MapViewOfFileFromApp(map_handle, desired_access, offset, _size);
+        BOOL r = CloseHandle(map_handle);
+        REALM_ASSERT_RELEASE(r);
+        if (!addr)
+            throw AddressSpaceExhausted(get_errno_msg("MapViewOfFileFromApp() failed: ", GetLastError()) +
+                                        " size: " + util::to_string(_size) + " offset: " + util::to_string(offset));
+
+        return addr;
+#endif
+    }
 }
 
-void munmap(void* addr, size_t size) REALM_NOEXCEPT
+#ifdef _MSC_VER
+#pragma warning(disable : 4297) // throw in noexcept
+#endif
+void munmap(void* addr, size_t size) noexcept
 {
-#ifdef REALM_ENABLE_ENCRYPTION
+#if REALM_ENABLE_ENCRYPTION
     remove_mapping(addr, size);
 #endif
-    if(::munmap(addr, size) != 0) {
+
+#ifdef _WIN32
+    if (!UnmapViewOfFile(addr))
+        throw std::runtime_error(get_errno_msg("UnmapViewOfFile failed: ", GetLastError()));
+
+#else
+    if (::munmap(addr, size) != 0) {
         int err = errno;
         throw std::runtime_error(get_errno_msg("munmap() failed: ", err));
     }
+#endif
 }
+#ifdef _MSC_VER
+#pragma warning(default : 4297)
+#endif
 
-void* mremap(int fd, void* old_addr, size_t old_size, File::AccessMode a, size_t new_size)
+void* mremap(FileDesc fd, size_t file_offset, void* old_addr, size_t old_size, File::AccessMode a, size_t new_size,
+             const char* encryption_key)
 {
-#ifdef REALM_ENABLE_ENCRYPTION
-    {
-        SpinLockGuard lock(mapping_lock);
+#if REALM_ENABLE_ENCRYPTION
+    if (encryption_key) {
+        LockGuard lock(mapping_mutex);
         size_t rounded_old_size = round_up_to_page_size(old_size);
         if (mapping_and_addr* m = find_mapping_for_addr(old_addr, rounded_old_size)) {
             size_t rounded_new_size = round_up_to_page_size(new_size);
@@ -680,42 +411,71 @@ void* mremap(int fd, void* old_addr, size_t old_size, File::AccessMode a, size_t
                 return old_addr;
 
             void* new_addr = mmap_anon(rounded_new_size);
-            m->mapping->set(new_addr, rounded_new_size);
-            int i = ::munmap(old_addr, rounded_old_size);
+            m->mapping->set(new_addr, rounded_new_size, file_offset);
             m->addr = new_addr;
             m->size = rounded_new_size;
-            if (i != 0) {
+#ifdef _WIN32
+            if (!UnmapViewOfFile(old_addr))
+                throw std::runtime_error(get_errno_msg("UnmapViewOfFile failed: ", GetLastError()));
+#else
+            if (::munmap(old_addr, rounded_old_size)) {
                 int err = errno;
                 throw std::runtime_error(get_errno_msg("munmap() failed: ", err));
             }
+#endif
             return new_addr;
+        }
+        // If we are using encryption, we must have used mmap and the mapping
+        // must have been added to the cache therefore find_mapping_for_addr()
+        // will succeed. Otherwise we would continue to mmap it below without
+        // the encryption key which is an error.
+        REALM_UNREACHABLE();
+    }
+#else
+    static_cast<void>(encryption_key);
+#endif
+
+#ifdef _GNU_SOURCE
+    {
+        void* new_addr = ::mremap(old_addr, old_size, new_size, MREMAP_MAYMOVE);
+        if (new_addr != MAP_FAILED)
+            return new_addr;
+        int err = errno; // Eliminate any risk of clobbering
+        // Do not throw here if mremap is declared as "not supported" by the
+        // platform Eg. When compiling with GNU libc on OSX, iOS.
+        // In this case fall through to no-mremap case below.
+        if (err != ENOTSUP && err != ENOSYS) {
+            if (is_mmap_memory_error(err)) {
+                throw AddressSpaceExhausted(get_errno_msg("mremap() failed: ", err) + " old size: " +
+                                            util::to_string(old_size) + " new size: " + util::to_string(new_size));
+            }
+            throw std::runtime_error(get_errno_msg("_gnu_src mmap() failed: ", err) + " old size: " +
+                                     util::to_string(old_size) + " new_size: " + util::to_string(new_size));
         }
     }
 #endif
 
-#ifdef _GNU_SOURCE
-    static_cast<void>(fd);
-    static_cast<void>(a);
-    void* new_addr = ::mremap(old_addr, old_size, new_size, MREMAP_MAYMOVE);
-    if (new_addr != MAP_FAILED)
-        return new_addr;
-    int err = errno; // Eliminate any risk of clobbering
-    throw std::runtime_error(get_errno_msg("mremap(): failed: ", err));
+    void* new_addr = mmap(fd, new_size, a, file_offset, nullptr);
+
+#ifdef _WIN32
+    if (!UnmapViewOfFile(old_addr))
+        throw std::runtime_error(get_errno_msg("UnmapViewOfFile failed: ", GetLastError()));
 #else
-    void* new_addr = mmap(fd, new_size, a, nullptr);
-    if(::munmap(old_addr, old_size) != 0) {
+    if (::munmap(old_addr, old_size) != 0) {
         int err = errno;
         throw std::runtime_error(get_errno_msg("munmap() failed: ", err));
     }
-    return new_addr;
 #endif
+
+    return new_addr;
 }
 
-void msync(void* addr, size_t size)
+void msync(FileDesc fd, void* addr, size_t size)
 {
-#ifdef REALM_ENABLE_ENCRYPTION
-    { // first check the encrypted mappings
-        SpinLockGuard lock(mapping_lock);
+#if REALM_ENABLE_ENCRYPTION
+    {
+        // first check the encrypted mappings
+        LockGuard lock(mapping_mutex);
         if (mapping_and_addr* m = find_mapping_for_addr(addr, round_up_to_page_size(size))) {
             m->mapping->flush();
             m->mapping->sync();
@@ -735,13 +495,24 @@ void msync(void* addr, size_t size)
     // See also
     // https://developer.apple.com/library/ios/documentation/Cocoa/Conceptual/CoreData/Articles/cdPersistentStores.html
     // for a discussion of this related to core data.
+
+#ifdef _WIN32
+    // FlushViewOfFile() is asynchronous and won't flush metadata (file size, etc)
+    if (!FlushViewOfFile(addr, size)) {
+        throw std::runtime_error("FlushViewOfFile() failed");
+    }
+    // Block until data and metadata is written physically to the media
+    if (!FlushFileBuffers(fd)) {
+        throw std::runtime_error("FlushFileBuffers() failed");
+    }
+    return;
+#else
+    static_cast<void>(fd);
     if (::msync(addr, size, MS_SYNC) != 0) {
         int err = errno; // Eliminate any risk of clobbering
         throw std::runtime_error(get_errno_msg("msync() failed: ", err));
     }
+#endif
 }
-
 }
 }
-
-#endif // _WIN32

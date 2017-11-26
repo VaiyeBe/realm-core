@@ -1,29 +1,28 @@
 /*************************************************************************
  *
- * REALM CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] Realm Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of Realm Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to Realm Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from Realm Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
+
 #ifndef REALM_IMPL_OUTPUT_STREAM_HPP
 #define REALM_IMPL_OUTPUT_STREAM_HPP
 
 #include <cstddef>
 #include <ostream>
 
-#include <stdint.h>
+#include <cstdint>
 
 #include <realm/util/features.h>
 
@@ -33,40 +32,40 @@ namespace realm {
 namespace _impl {
 
 
-class OutputStream: public ArrayWriterBase {
+class OutputStream : public ArrayWriterBase {
 public:
     OutputStream(std::ostream&);
-    ~OutputStream() REALM_NOEXCEPT;
+    ~OutputStream() noexcept;
 
-    size_t get_pos() const REALM_NOEXCEPT;
+    ref_type get_ref_of_next_array() const noexcept;
 
     void write(const char* data, size_t size);
 
-    size_t write_array(const char* data, size_t size, uint_fast32_t checksum) override;
+    ref_type write_array(const char* data, size_t size, uint32_t checksum) override;
+
 private:
-    std::size_t m_pos;
+    ref_type m_next_ref;
     std::ostream& m_out;
+
+    void do_write(const char* data, size_t size);
 };
-
-
-
 
 
 // Implementation:
 
-inline OutputStream::OutputStream(std::ostream& out):
-    m_pos(0),
-    m_out(out)
+inline OutputStream::OutputStream(std::ostream& out)
+    : m_next_ref(0)
+    , m_out(out)
 {
 }
 
-inline OutputStream::~OutputStream() REALM_NOEXCEPT
+inline OutputStream::~OutputStream() noexcept
 {
 }
 
-inline std::size_t OutputStream::get_pos() const REALM_NOEXCEPT
+inline size_t OutputStream::get_ref_of_next_array() const noexcept
 {
-    return m_pos;
+    return m_next_ref;
 }
 
 

@@ -1,14 +1,40 @@
-#include <algorithm>
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
 
-#ifdef _WIN32
-#include <win32/types.h>
-#endif
+#include <algorithm>
 
 #include <realm/array_blobs_big.hpp>
 #include <realm/column.hpp>
 
 
 using namespace realm;
+
+BinaryData ArrayBigBlobs::get_at(size_t ndx, size_t& pos) const noexcept
+{
+    ref_type ref = get_as_ref(ndx);
+    if (ref == 0)
+        return {}; // realm::null();
+
+    ArrayBlob blob(m_alloc);
+    blob.init_from_ref(ref);
+
+    return blob.get_at(pos);
+}
 
 
 void ArrayBigBlobs::add(BinaryData value, bool add_zero_term)
@@ -20,14 +46,14 @@ void ArrayBigBlobs::add(BinaryData value, bool add_zero_term)
     }
     else {
         ArrayBlob new_blob(m_alloc);
-        new_blob.create(); // Throws
-        new_blob.add(value.data(), value.size(), add_zero_term); // Throws
-        Array::add(static_cast<int64_t>(new_blob.get_ref())); // Throws
+        new_blob.create();                                                      // Throws
+        ref_type ref = new_blob.add(value.data(), value.size(), add_zero_term); // Throws
+        Array::add(from_ref(ref));                                              // Throws
     }
 }
 
 
-void ArrayBigBlobs::set(std::size_t ndx, BinaryData value, bool add_zero_term)
+void ArrayBigBlobs::set(size_t ndx, BinaryData value, bool add_zero_term)
 {
     REALM_ASSERT_3(ndx, <, size());
     REALM_ASSERT_7(value.size(), ==, 0, ||, value.data(), !=, 0);
@@ -40,21 +66,22 @@ void ArrayBigBlobs::set(std::size_t ndx, BinaryData value, bool add_zero_term)
     }
     else if (ref == 0 && value.data() != nullptr) {
         ArrayBlob new_blob(m_alloc);
-        new_blob.create(); // Throws
-        new_blob.add(value.data(), value.size(), add_zero_term); // Throws
-        ref = new_blob.get_ref();
+        new_blob.create();                                             // Throws
+        ref = new_blob.add(value.data(), value.size(), add_zero_term); // Throws
         Array::set_as_ref(ndx, ref);
         return;
     }
     else if (ref != 0 && value.data() != nullptr) {
         blob.init_from_ref(ref);
         blob.set_parent(this, ndx);
-        blob.clear(); // Throws
-        blob.add(value.data(), value.size(), add_zero_term); // Throws
+        ref_type new_ref = blob.replace(0, blob.blob_size(), value.data(), value.size(), add_zero_term); // Throws
+        if (new_ref != ref) {
+            Array::set_as_ref(ndx, new_ref);
+        }
         return;
     }
     else if (ref != 0 && value.is_null()) {
-        Array::destroy(ref, get_alloc()); // Shallow
+        Array::destroy_deep(ref, get_alloc());
         Array::set(ndx, 0);
         return;
     }
@@ -72,16 +99,15 @@ void ArrayBigBlobs::insert(size_t ndx, BinaryData value, bool add_zero_term)
     }
     else {
         ArrayBlob new_blob(m_alloc);
-        new_blob.create(); // Throws
-        new_blob.add(value.data(), value.size(), add_zero_term); // Throws
+        new_blob.create();                                                      // Throws
+        ref_type ref = new_blob.add(value.data(), value.size(), add_zero_term); // Throws
 
-        Array::insert(ndx, int64_t(new_blob.get_ref())); // Throws
+        Array::insert(ndx, int64_t(ref)); // Throws
     }
 }
 
 
-size_t ArrayBigBlobs::count(BinaryData value, bool is_string,
-                            size_t begin, size_t end) const REALM_NOEXCEPT
+size_t ArrayBigBlobs::count(BinaryData value, bool is_string, size_t begin, size_t end) const noexcept
 {
     size_t num_matches = 0;
 
@@ -98,8 +124,7 @@ size_t ArrayBigBlobs::count(BinaryData value, bool is_string,
 }
 
 
-size_t ArrayBigBlobs::find_first(BinaryData value, bool is_string,
-                                 size_t begin, size_t end) const REALM_NOEXCEPT
+size_t ArrayBigBlobs::find_first(BinaryData value, bool is_string, size_t begin, size_t end) const noexcept
 {
     if (end == npos)
         end = m_size;
@@ -108,7 +133,7 @@ size_t ArrayBigBlobs::find_first(BinaryData value, bool is_string,
     // When strings are stored as blobs, they are always zero-terminated
     // but the value we get as input might not be.
     size_t value_size = value.size();
-    size_t full_size = is_string ? value_size+1 : value_size;
+    size_t full_size = is_string ? value_size + 1 : value_size;
 
     if (value.is_null()) {
         for (size_t i = begin; i != end; ++i) {
@@ -136,8 +161,8 @@ size_t ArrayBigBlobs::find_first(BinaryData value, bool is_string,
 }
 
 
-void ArrayBigBlobs::find_all(Column& result, BinaryData value, bool is_string, size_t add_offset,
-                             size_t begin, size_t end)
+void ArrayBigBlobs::find_all(IntegerColumn& result, BinaryData value, bool is_string, size_t add_offset, size_t begin,
+                             size_t end)
 {
     size_t begin_2 = begin;
     for (;;) {
@@ -150,8 +175,7 @@ void ArrayBigBlobs::find_all(Column& result, BinaryData value, bool is_string, s
 }
 
 
-ref_type ArrayBigBlobs::bptree_leaf_insert(size_t ndx, BinaryData value, bool add_zero_term,
-                                           TreeInsertBase& state)
+ref_type ArrayBigBlobs::bptree_leaf_insert(size_t ndx, BinaryData value, bool add_zero_term, TreeInsertBase& state)
 {
     size_t leaf_size = size();
     REALM_ASSERT_3(leaf_size, <=, REALM_MAX_BPNODE_SIZE);
@@ -183,9 +207,9 @@ ref_type ArrayBigBlobs::bptree_leaf_insert(size_t ndx, BinaryData value, bool ad
 }
 
 
-#ifdef REALM_DEBUG
+#ifdef REALM_DEBUG // LCOV_EXCL_START ignore debug functions
 
-void ArrayBigBlobs::Verify() const
+void ArrayBigBlobs::verify() const
 {
     REALM_ASSERT(has_refs());
     for (size_t i = 0; i < size(); ++i) {
@@ -194,10 +218,11 @@ void ArrayBigBlobs::Verify() const
         if (blob_ref != 0) {
             ArrayBlob blob(m_alloc);
             blob.init_from_ref(blob_ref);
-            blob.Verify();
+            blob.verify();
         }
     }
 }
+
 
 void ArrayBigBlobs::to_dot(std::ostream& out, bool, StringData title) const
 {
@@ -224,4 +249,4 @@ void ArrayBigBlobs::to_dot(std::ostream& out, bool, StringData title) const
     to_dot_parent_edge(out);
 }
 
-#endif
+#endif // LCOV_EXCL_STOP ignore debug functions

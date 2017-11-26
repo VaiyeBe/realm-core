@@ -1,29 +1,30 @@
 /*************************************************************************
  *
- * REALM CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] Realm Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of Realm Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to Realm Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from Realm Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
 
-#include <cerrno>
 #include <algorithm>
-#include <iostream>
-
-#include <fcntl.h>
 #include <atomic>
+#include <cerrno>
+#include <fcntl.h>
+#include <iostream>
+#include <mutex>
+#include <sstream>
+#include <type_traits>
+#include <random>
 
 #include <realm/util/features.h>
 #include <realm/util/errno.hpp>
@@ -32,32 +33,50 @@
 #include <realm/group_writer.hpp>
 #include <realm/group_shared.hpp>
 #include <realm/group_writer.hpp>
-#ifdef REALM_ENABLE_REPLICATION
-#  include <realm/replication.hpp>
-#endif
+#include <realm/link_view.hpp>
+#include <realm/replication.hpp>
+#include <realm/impl/simulated_failure.hpp>
+#include <realm/disable_sync_to_disk.hpp>
 
 #ifndef _WIN32
-#  include <sys/wait.h>
-#  include <sys/time.h>
-#  include <unistd.h>
+#include <sys/wait.h>
+#include <sys/time.h>
+#include <unistd.h>
 #else
-#  define NOMINMAX
-#  include <windows.h>
+#include <windows.h>
+#include <process.h>
 #endif
 
 //#define REALM_ENABLE_LOGFILE
 
 
 using namespace realm;
+using namespace realm::metrics;
 using namespace realm::util;
-
+using Durability = SharedGroupOptions::Durability;
 
 namespace {
 
 // Constants controlling the amount of uncommited writes in flight:
+#ifdef REALM_ASYNC_DAEMON
 const uint16_t max_write_slots = 100;
 const uint16_t relaxed_sync_threshold = 50;
-#define SHAREDINFO_VERSION 4
+#endif
+
+// value   change
+// --------------------
+//  4      Unknown
+//  5      Introduction of SharedInfo::file_format_version and
+//         SharedInfo::history_type.
+//  6      Using new robust mutex emulation where applicable
+//  7      Introducing `commit_in_critical_phase` and `sync_agent_present`, and
+//         changing `daemon_started` and `daemon_ready` from 1-bit to 8-bit
+//         fields.
+//  8      Placing the commitlog history inside the Realm file.
+//  9      Fair write transactions requires an additional condition variable,
+//         `write_fairness`
+// 10      Introducing SharedInfo::history_schema_version.
+const uint_fast16_t g_shared_info_version = 10;
 
 // The following functions are carefully designed for minimal overhead
 // in case of contention among read transactions. In case of contention,
@@ -141,7 +160,8 @@ const uint16_t relaxed_sync_threshold = 50;
 //   there is no standardized support for it.
 //
 
-template<typename T> bool atomic_double_inc_if_even(std::atomic<T>& counter)
+template <typename T>
+bool atomic_double_inc_if_even(std::atomic<T>& counter)
 {
     T oldval = counter.fetch_add(2, std::memory_order_acquire);
     if (oldval & 1) {
@@ -152,12 +172,14 @@ template<typename T> bool atomic_double_inc_if_even(std::atomic<T>& counter)
     return true;
 }
 
-template<typename T> inline void atomic_double_dec(std::atomic<T>& counter)
+template <typename T>
+inline void atomic_double_dec(std::atomic<T>& counter)
 {
     counter.fetch_sub(2, std::memory_order_release);
 }
 
-template<typename T> bool atomic_one_if_zero(std::atomic<T>& counter)
+template <typename T>
+bool atomic_one_if_zero(std::atomic<T>& counter)
 {
     T old_val = counter.fetch_add(1, std::memory_order_acquire);
     if (old_val != 0) {
@@ -167,7 +189,8 @@ template<typename T> bool atomic_one_if_zero(std::atomic<T>& counter)
     return true;
 }
 
-template<typename T> void atomic_dec(std::atomic<T>& counter)
+template <typename T>
+void atomic_dec(std::atomic<T>& counter)
 {
     counter.fetch_sub(1, std::memory_order_release);
 }
@@ -199,66 +222,57 @@ public:
         uint32_t next;
     };
 
-    Ringbuffer() REALM_NOEXCEPT
+    Ringbuffer() noexcept
     {
         entries = init_readers_size;
-        for (int i=0; i < init_readers_size; i++) {
+        for (int i = 0; i < init_readers_size; i++) {
             data[i].version = 1;
-            data[i].count.store( 1, std::memory_order_relaxed );
+            data[i].count.store(1, std::memory_order_relaxed);
             data[i].current_top = 0;
             data[i].filesize = 0;
             data[i].next = i + 1;
         }
         old_pos = 0;
-        data[ 0 ].count.store( 0, std::memory_order_relaxed );
-        data[ init_readers_size-1 ].next = 0 ;
-        put_pos.store( 0, std::memory_order_release );
+        data[0].count.store(0, std::memory_order_relaxed);
+        data[init_readers_size - 1].next = 0;
+        put_pos.store(0, std::memory_order_release);
     }
 
     void dump()
     {
         uint_fast32_t i = old_pos;
         std::cout << "--- " << std::endl;
-         while (i != put_pos.load()) {
-            std::cout << "  used " << i << " : "
-                 << data[i].count.load() << " | "
-                 << data[i].version
-                 << std::endl;
+        while (i != put_pos.load()) {
+            std::cout << "  used " << i << " : " << data[i].count.load() << " | " << data[i].version << std::endl;
             i = data[i].next;
         }
-        std::cout << "  LAST " << i << " : "
-             << data[i].count.load() << " | "
-             << data[i].version
-             << std::endl;
+        std::cout << "  LAST " << i << " : " << data[i].count.load() << " | " << data[i].version << std::endl;
         i = data[i].next;
         while (i != old_pos) {
-            std::cout << "  free " << i << " : "
-                 << data[i].count.load() << " | "
-                 << data[i].version
-                 << std::endl;
+            std::cout << "  free " << i << " : " << data[i].count.load() << " | " << data[i].version << std::endl;
             i = data[i].next;
         }
         std::cout << "--- Done" << std::endl;
     }
 
-    void expand_to(uint_fast32_t new_entries)  REALM_NOEXCEPT
+    void expand_to(uint_fast32_t new_entries) noexcept
     {
         // std::cout << "expanding to " << new_entries << std::endl;
         // dump();
         for (uint_fast32_t i = entries; i < new_entries; i++) {
             data[i].version = 1;
-            data[i].count.store( 1, std::memory_order_relaxed );
+            data[i].count.store(1, std::memory_order_relaxed);
             data[i].current_top = 0;
             data[i].filesize = 0;
             data[i].next = i + 1;
         }
-        data[ new_entries - 1 ].next = old_pos;
-        data[ put_pos.load(std::memory_order_relaxed) ].next = entries;
+        data[new_entries - 1].next = old_pos;
+        data[put_pos.load(std::memory_order_relaxed)].next = entries;
         entries = new_entries;
         // dump();
     }
 
-    static size_t compute_required_space(uint_fast32_t num_entries)  REALM_NOEXCEPT
+    static size_t compute_required_space(uint_fast32_t num_entries) noexcept
     {
         // get space required for given number of entries beyond the initial count.
         // NB: this not the size of the ringbuffer, it is the size minus whatever was
@@ -266,64 +280,86 @@ public:
         return sizeof(ReadCount) * (num_entries - init_readers_size);
     }
 
-    uint_fast32_t get_num_entries() const  REALM_NOEXCEPT
+    uint_fast32_t get_num_entries() const noexcept
     {
         return entries;
     }
 
-    uint_fast32_t last() const  REALM_NOEXCEPT
+    uint_fast32_t last() const noexcept
     {
         return put_pos.load(std::memory_order_acquire);
     }
 
-    const ReadCount& get(uint_fast32_t idx) const  REALM_NOEXCEPT
+    const ReadCount& get(uint_fast32_t idx) const noexcept
     {
         return data[idx];
     }
 
-    const ReadCount& get_last() const  REALM_NOEXCEPT
+    const ReadCount& get_last() const noexcept
     {
         return get(last());
     }
 
-    const ReadCount& get_oldest() const  REALM_NOEXCEPT
+    // This method re-initialises the last used ringbuffer entry to hold a new entry.
+    // Precondition: This should *only* be done if the caller has established that she
+    // is the only thread/process that has access to the ringbuffer. It is currently
+    // called from init_versioning(), which is called by SharedGroup::open() under the
+    // condition that it is the session initiator and under guard by the control mutex,
+    // thus ensuring the precondition.
+    // It is most likely not suited for any other use.
+    ReadCount& reinit_last() noexcept
     {
-        return get(old_pos);
+        ReadCount& r = data[last()];
+        // r.count is an atomic<> due to other usage constraints. Right here, we're
+        // operating under mutex protection, so the use of an atomic store is immaterial
+        // and just forced on us by the type of r.count.
+        // You'll find the full discussion of how r.count is operated and why it must be
+        // an atomic earlier in this file.
+        r.count.store(0, std::memory_order_relaxed);
+        return r;
     }
 
-    bool is_full() const  REALM_NOEXCEPT
+    const ReadCount& get_oldest() const noexcept
+    {
+        return get(old_pos.load(std::memory_order_relaxed));
+    }
+
+    bool is_full() const noexcept
     {
         uint_fast32_t idx = get(last()).next;
-        return idx == old_pos;
+        return idx == old_pos.load(std::memory_order_relaxed);
     }
 
-    uint_fast32_t next() const  REALM_NOEXCEPT
-    { // do not call this if the buffer is full!
+    uint_fast32_t next() const noexcept
+    {
+        // do not call this if the buffer is full!
         uint_fast32_t idx = get(last()).next;
         return idx;
     }
 
-    ReadCount& get_next()  REALM_NOEXCEPT
+    ReadCount& get_next() noexcept
     {
         REALM_ASSERT(!is_full());
-        return data[ next() ];
+        return data[next()];
     }
 
-    void use_next()  REALM_NOEXCEPT
+    void use_next() noexcept
     {
         atomic_dec(get_next().count); // .store_release(0);
         put_pos.store(next(), std::memory_order_release);
     }
 
-    void cleanup()  REALM_NOEXCEPT
-    {   // invariant: entry held by put_pos has count > 1.
+    void cleanup() noexcept
+    {
+        // invariant: entry held by put_pos has count > 1.
         // std::cout << "cleanup: from " << old_pos << " to " << put_pos.load_relaxed();
         // dump();
-        while (old_pos != put_pos.load(std::memory_order_relaxed)) {
-            const ReadCount& r = get(old_pos);
-            if (! atomic_one_if_zero( r.count ))
+        while (old_pos.load(std::memory_order_relaxed) != put_pos.load(std::memory_order_relaxed)) {
+            const ReadCount& r = get(old_pos.load(std::memory_order_relaxed));
+            if (!atomic_one_if_zero(r.count))
                 break;
-            old_pos = get(old_pos).next;
+            auto next_ndx = get(old_pos.load(std::memory_order_relaxed)).next;
+            old_pos.store(next_ndx, std::memory_order_relaxed);
         }
     }
 
@@ -331,7 +367,7 @@ private:
     // number of entries. Access synchronized through put_pos.
     uint32_t entries;
     std::atomic<uint32_t> put_pos; // only changed under lock, but accessed outside lock
-    uint32_t old_pos; // only accessed during write transactions and under lock
+    std::atomic<uint32_t> old_pos; // only changed during write transactions and under lock
 
     const static int init_readers_size = 32;
 
@@ -342,76 +378,162 @@ private:
     // To ensure proper alignment across all platforms, the SharedInfo structure
     // should NOT have a stricter alignment requirement than the ReadCount structure.
     ReadCount data[init_readers_size];
-
 };
 
 } // anonymous namespace
 
 
+/// The structure of the contents of the per session `.lock` file. Note that
+/// this file is transient in that it is recreated/reinitialized at the
+/// beginning of every session. A session is any sequence of temporally
+/// overlapping openings of a particular Realm file via SharedGroup objects. For
+/// example, if there are two SharedGroup objects, A and B, and the file is
+/// first opened via A, then opened via B, then closed via A, and finally closed
+/// via B, then the session streaches from the opening via A to the closing via
+/// B.
+///
+/// IMPORTANT: Remember to bump `g_shared_info_version` if anything is changed
+/// in the memory layout of this class, or if the meaning of any of the stored
+/// values change.
+///
+/// Members `init_complete`, `shared_info_version`, `size_of_mutex`, and
+/// `size_of_condvar` may only be modified only while holding an exclusive lock
+/// on the file, and may be read only while holding a shared (or exclusive) lock
+/// on the file. All other members (except for the Ringbuffer) may be accessed
+/// only while holding a lock on `controlmutex`.
+///
+/// SharedInfo must be 8-byte aligned. On 32-bit Apple platforms, mutexes store their
+/// alignment as part of the mutex state. We're copying the SharedInfo (including
+/// embedded but alway unlocked mutexes) and it must retain the same alignment
+/// throughout.
+struct alignas(8) SharedGroup::SharedInfo {
+    /// Indicates that initialization of the lock file was completed
+    /// sucessfully.
+    ///
+    /// CAUTION: This member must never move or change type, as that would
+    /// compromize safety of the the session initiation process.
+    std::atomic<uint8_t> init_complete; // Offset 0
 
-struct SharedGroup::SharedInfo
-{
-    // indicates lock file has valid content, implying that all the following member
-    // variables have been initialized. All member variables, except for the Ringbuffer,
-    // are protected by 'controlmutex', except during initialization, where access is
-    // guarded by the exclusive file lock.
-    bool init_complete;
+    /// The size in bytes of a mutex member of SharedInfo. This allows all
+    /// session participants to be in agreement. Obviously, a size match is not
+    /// enough to guarantee identical layout internally in the mutex object, but
+    /// it is hoped that it will catch some (if not most) of the cases where
+    /// there is a layout discrepancy internally in the mutex object.
+    uint8_t size_of_mutex; // Offset 1
 
-    // size of critical structures. Must match among all participants in a session
-    uint8_t size_of_mutex;
-    uint8_t size_of_condvar;
+    /// Like size_of_mutex, but for condition variable members of SharedInfo.
+    uint8_t size_of_condvar; // Offset 2
 
-    // set when a participant decides to start the daemon, cleared by the daemon
-    // when it decides to exit. Participants check during open() and start the
-    // daemon if running in async mode.
-    bool daemon_started;
+    /// Set during the critical phase of a commit, when the logs, the ringbuffer
+    /// and the database may be out of sync with respect to each other. If a
+    /// writer crashes during this phase, there is no safe way of continuing
+    /// with further write transactions. When beginning a write transaction,
+    /// this must be checked and an exception thrown if set.
+    ///
+    /// FIXME: This is a temporary approach until we get the commitlog data
+    /// moved into the realm file. After that it should be feasible to either
+    /// handle the error condition properly or preclude it by using a non-robust
+    /// mutex for the remaining and much smaller critical section.
+    uint8_t commit_in_critical_phase = 0; // Offset 3
 
-    // set by the daemon when it is ready to handle commits. Participants must
-    // wait during open() on 'daemon_becomes_ready' for this to become true.
-    // Cleared by the daemon when it decides to exit.
-    bool daemon_ready; // offset 4
+    /// The target Realm file format version for the current session. This
+    /// allows all session participants to be in agreement. It can only differ
+    /// from what is returned by Group::get_file_format_version() temporarily,
+    /// and only during the Realm file opening process. If it differs, it means
+    /// that the file format needs to be upgraded from its current format
+    /// (Group::get_file_format_version()), the format specified by this member
+    /// of SharedInfo.
+    uint8_t file_format_version; // Offset 4
 
-    // Tracks the most recent version number.
-    uint16_t version;
-    uint16_t flags; // offset 8
-    uint16_t free_write_slots;
+    /// Stores a value of type Replication::HistoryType. Must match across all
+    /// session participants.
+    int8_t history_type; // Offset 5
 
-    // number of participating shared groups:
-    uint32_t num_participants; // offset 12
+    /// The SharedInfo layout version. This allows all session participants to
+    /// be in agreement. Must be bumped if the layout of the SharedInfo
+    /// structure is changed. Note, however, that only the part that lies beyond
+    /// SharedInfoUnchangingLayout can have its layout changed.
+    ///
+    /// CAUTION: This member must never move or change type, as that would
+    /// compromize version agreement checking.
+    uint16_t shared_info_version = g_shared_info_version; // Offset 6
 
-    // Latest version number. Guarded by the controlmutex (for lock-free access, use
-    // get_current_version() instead)
-    uint64_t latest_version_number; // offset 16
+    uint16_t durability;           // Offset 8
+    uint16_t free_write_slots = 0; // Offset 10
 
-    // Pid of process initiating the session, but only if that process runs with encryption
-    // enabled, zero otherwise. Other processes cannot join a session wich uses encryption,
-    // because interprocess sharing is not supported by our current encryption mechanisms.
-    uint64_t session_initiator_pid;
+    /// Number of participating shared groups
+    uint32_t num_participants = 0; // Offset 12
 
-    uint64_t number_of_versions;
-    RobustMutex writemutex;
-    RobustMutex balancemutex;
-    RobustMutex controlmutex;
-#ifndef _WIN32
-    // FIXME: windows pthread support for condvar not ready
-    PlatformSpecificCondVar::SharedPart room_to_write;
-    PlatformSpecificCondVar::SharedPart work_to_do;
-    PlatformSpecificCondVar::SharedPart daemon_becomes_ready;
-    PlatformSpecificCondVar::SharedPart new_commit_available;
+    /// Latest version number. Guarded by the controlmutex (for lock-free
+    /// access, use get_version_of_latest_snapshot() instead)
+    uint64_t latest_version_number; // Offset 16
+
+    /// Pid of process initiating the session, but only if that process runs
+    /// with encryption enabled, zero otherwise. Other processes cannot join a
+    /// session wich uses encryption, because interprocess sharing is not
+    /// supported by our current encryption mechanisms.
+    uint64_t session_initiator_pid = 0; // Offset 24
+
+    uint64_t number_of_versions; // Offset 32
+
+    /// True (1) if there is a sync agent present (a session participant acting
+    /// as sync client). It is an error to have a session with more than one
+    /// sync agent. The purpose of this flag is to prevent that from ever
+    /// happening. If the sync agent crashes and leaves the flag set, the
+    /// session will need to be restarted (lock file reinitialized) before a new
+    /// sync agent can be started.
+    uint8_t sync_agent_present = 0; // Offset 40
+
+    /// Set when a participant decides to start the daemon, cleared by the
+    /// daemon when it decides to exit. Participants check during open() and
+    /// start the daemon if running in async mode.
+    uint8_t daemon_started = 0; // Offset 41
+
+    /// Set by the daemon when it is ready to handle commits. Participants must
+    /// wait during open() on 'daemon_becomes_ready' for this to become true.
+    /// Cleared by the daemon when it decides to exit.
+    uint8_t daemon_ready = 0; // Offset 42
+
+    uint8_t filler_1;  // Offset 43
+
+    /// Stores a history schema version (as returned by
+    /// Replication::get_history_schema_version()). Must match across all
+    /// session participants.
+    uint16_t history_schema_version; // Offset 44
+
+    uint16_t filler_2; // Offset 46
+
+    InterprocessMutex::SharedPart shared_writemutex; // Offset 48
+#ifdef REALM_ASYNC_DAEMON
+    InterprocessMutex::SharedPart shared_balancemutex;
 #endif
+    InterprocessMutex::SharedPart shared_controlmutex;
+    // FIXME: windows pthread support for condvar not ready
+    InterprocessCondVar::SharedPart room_to_write;
+    InterprocessCondVar::SharedPart work_to_do;
+    InterprocessCondVar::SharedPart daemon_becomes_ready;
+    InterprocessCondVar::SharedPart new_commit_available;
+    InterprocessCondVar::SharedPart pick_next_writer;
+    std::atomic<uint32_t> next_ticket;
+    uint32_t next_served = 0;
+
     // IMPORTANT: The ringbuffer MUST be the last field in SharedInfo - see above.
     Ringbuffer readers;
-    SharedInfo(DurabilityLevel);
-    ~SharedInfo() REALM_NOEXCEPT {}
+
+    SharedInfo(Durability, Replication::HistoryType, int history_schema_version);
+    ~SharedInfo() noexcept
+    {
+    }
+
     void init_versioning(ref_type top_ref, size_t file_size, uint64_t initial_version)
     {
         // Create our first versioning entry:
-        Ringbuffer::ReadCount& r = readers.get_next();
+        Ringbuffer::ReadCount& r = readers.reinit_last();
         r.filesize = file_size;
         r.version = initial_version;
         r.current_top = top_ref;
-        readers.use_next();
     }
+
     uint_fast64_t get_current_version_unchecked() const
     {
         return readers.get_last().version;
@@ -419,45 +541,98 @@ struct SharedGroup::SharedInfo
 };
 
 
-SharedGroup::SharedInfo::SharedInfo(DurabilityLevel dlevel):
-#ifndef _WIN32
-    size_of_mutex(sizeof(writemutex)),
-    size_of_condvar(sizeof(room_to_write)),
-    writemutex(), // Throws
-    balancemutex(), // Throws
-    controlmutex() // Throws
-#else
-    size_of_mutex(sizeof(writemutex)),
-    size_of_condvar(0),
-    writemutex(), // Throws
-    balancemutex() // Throws
+SharedGroup::SharedInfo::SharedInfo(Durability dura, Replication::HistoryType ht, int hsv)
+    : size_of_mutex(sizeof(shared_writemutex))
+    , size_of_condvar(sizeof(room_to_write))
+    , shared_writemutex() // Throws
+#ifdef REALM_ASYNC_DAEMON
+    , shared_balancemutex() // Throws
 #endif
+    , shared_controlmutex() // Throws
 {
-    version = SHAREDINFO_VERSION;
-    flags = dlevel; // durability level is fixed from creation
-#ifndef _WIN32
-    PlatformSpecificCondVar::init_shared_part(room_to_write); // Throws
-    PlatformSpecificCondVar::init_shared_part(work_to_do); // Throws
-    PlatformSpecificCondVar::init_shared_part(daemon_becomes_ready); // Throws
-    PlatformSpecificCondVar::init_shared_part(new_commit_available); // Throws
+    durability = static_cast<uint16_t>(dura); // durability level is fixed from creation
+    REALM_ASSERT(!util::int_cast_has_overflow<decltype(history_type)>(ht + 0));
+    REALM_ASSERT(!util::int_cast_has_overflow<decltype(history_schema_version)>(hsv));
+    history_type = ht;
+    history_schema_version = static_cast<uint16_t>(hsv);
+    InterprocessCondVar::init_shared_part(new_commit_available); // Throws
+    InterprocessCondVar::init_shared_part(pick_next_writer); // Throws
+    next_ticket = 0;
+#ifdef REALM_ASYNC_DAEMON
+    InterprocessCondVar::init_shared_part(room_to_write);        // Throws
+    InterprocessCondVar::init_shared_part(work_to_do);           // Throws
+    InterprocessCondVar::init_shared_part(daemon_becomes_ready); // Throws
 #endif
-    free_write_slots = 0;
-    num_participants = 0;
-    session_initiator_pid = 0;
-    daemon_started = false;
-    daemon_ready = false;
-    init_complete = 1;
+
+    // IMPORTANT: The offsets, types (, and meanings) of these members must
+    // never change, not even when the SharedInfo layout version is bumped. The
+    // eternal constancy of this part of the layout is what ensures that a
+    // joining session participant can reliably verify that the actual format is
+    // as expected.
+    //
+    // offsetof() is undefined for non-pod types but often behaves correct. 
+    // Since we just use it in static_assert(), a bug is caught at compile time
+    // which isn't critical. FIXME: See if there is a way to fix this, but it
+    // might not be trivial since it contains RobustMutex members and others
+#ifndef _WIN32
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
+#endif
+    static_assert(offsetof(SharedInfo, init_complete) == 0 &&
+                  ATOMIC_BOOL_LOCK_FREE==2 &&
+                  std::is_same<decltype(init_complete), std::atomic<uint8_t>>::value &&
+                  offsetof(SharedInfo, shared_info_version) == 6 &&
+                  std::is_same<decltype(shared_info_version), uint16_t>::value,
+                  "Forbidden change in SharedInfo layout");
+
+    // Try to catch some of the memory layout changes that requires bumping of
+    // the SharedInfo file format version (shared_info_version).
+    static_assert(offsetof(SharedInfo, size_of_mutex) == 1 &&
+                  std::is_same<decltype(size_of_mutex), uint8_t>::value &&
+                  offsetof(SharedInfo, size_of_condvar) == 2 &&
+                  std::is_same<decltype(size_of_condvar), uint8_t>::value &&
+                  offsetof(SharedInfo, commit_in_critical_phase) == 3 &&
+                  std::is_same<decltype(commit_in_critical_phase), uint8_t>::value &&
+                  offsetof(SharedInfo, file_format_version) == 4 &&
+                  std::is_same<decltype(file_format_version), uint8_t>::value &&
+                  offsetof(SharedInfo, history_type) == 5 &&
+                  std::is_same<decltype(history_type), int8_t>::value &&
+                  offsetof(SharedInfo, durability) == 8 &&
+                  std::is_same<decltype(durability), uint16_t>::value &&
+                  offsetof(SharedInfo, free_write_slots) == 10 &&
+                  std::is_same<decltype(free_write_slots), uint16_t>::value &&
+                  offsetof(SharedInfo, num_participants) == 12 &&
+                  std::is_same<decltype(num_participants), uint32_t>::value &&
+                  offsetof(SharedInfo, latest_version_number) == 16 &&
+                  std::is_same<decltype(latest_version_number), uint64_t>::value &&
+                  offsetof(SharedInfo, session_initiator_pid) == 24 &&
+                  std::is_same<decltype(session_initiator_pid), uint64_t>::value &&
+                  offsetof(SharedInfo, number_of_versions) == 32 &&
+                  std::is_same<decltype(number_of_versions), uint64_t>::value &&
+                  offsetof(SharedInfo, sync_agent_present) == 40 &&
+                  std::is_same<decltype(sync_agent_present), uint8_t>::value &&
+                  offsetof(SharedInfo, daemon_started) == 41 &&
+                  std::is_same<decltype(daemon_started), uint8_t>::value &&
+                  offsetof(SharedInfo, daemon_ready) == 42 &&
+                  std::is_same<decltype(daemon_ready), uint8_t>::value &&
+                  offsetof(SharedInfo, filler_1) == 43 &&
+                  std::is_same<decltype(filler_1), uint8_t>::value &&
+                  offsetof(SharedInfo, history_schema_version) == 44 &&
+                  std::is_same<decltype(history_schema_version), uint16_t>::value &&
+                  offsetof(SharedInfo, filler_2) == 46 &&
+                  std::is_same<decltype(filler_2), uint16_t>::value &&
+                  offsetof(SharedInfo, shared_writemutex) == 48 &&
+                  std::is_same<decltype(shared_writemutex), InterprocessMutex::SharedPart>::value,
+                  "Caught layout change requiring SharedInfo file format bumping");
+#ifndef _WIN32
+#pragma GCC diagnostic pop
+#endif
 }
 
 
 namespace {
 
-void recover_from_dead_write_transact()
-{
-    // Nothing needs to be done
-}
-
-#ifndef _WIN32
+#ifdef REALM_ASYNC_DAEMON
 
 void spawn_daemon(const std::string& file)
 {
@@ -477,16 +652,18 @@ void spawn_daemon(const std::string& file)
 
         // close all descriptors:
         int i;
-        for (i=m-1;i>=0;--i)
+        for (i = m - 1; i >= 0; --i)
             close(i);
-        i = ::open("/dev/null",O_RDWR);
 #ifdef REALM_ENABLE_LOGFILE
         // FIXME: Do we want to always open the log file? Should it be configurable?
-        i = ::open((file+".log").c_str(),O_RDWR | O_CREAT | O_APPEND | O_SYNC, S_IRWXU);
+        i = ::open((file + ".log").c_str(), O_RDWR | O_CREAT | O_APPEND | O_SYNC, S_IRWXU);
 #else
-        i = dup(i);
+        i = ::open("/dev/null", O_RDWR);
 #endif
-        i = dup(i); static_cast<void>(i);
+        if (i >= 0) {
+            int j = dup(i);
+            static_cast<void>(j);
+        }
 #ifdef REALM_ENABLE_LOGFILE
         std::cerr << "Detaching" << std::endl;
 #endif
@@ -506,15 +683,14 @@ void spawn_daemon(const std::string& file)
         }
         execl(async_daemon, async_daemon, file.c_str(), static_cast<char*>(0));
 
-        // if we continue here, exec has failed so return error
-        // if exec succeeds, we don't come back here.
+// if we continue here, exec has failed so return error
+// if exec succeeds, we don't come back here.
 #if REALM_ANDROID
         _exit(1);
 #else
         _Exit(1);
 #endif
         // child process ends here
-
     }
     else if (pid > 0) { // parent process, fork succeeded:
 
@@ -523,11 +699,10 @@ void spawn_daemon(const std::string& file)
         int pid_changed;
         do {
             pid_changed = waitpid(pid, &status, 0);
-        }
-        while (pid_changed == -1 && errno == EINTR);
+        } while (pid_changed == -1 && errno == EINTR);
         if (pid_changed != pid) {
-            std::cerr << "Waitpid returned pid = " << pid_changed 
-                      << " and status = " << std::hex << status << std::endl;
+            std::cerr << "Waitpid returned pid = " << pid_changed << " and status = " << std::hex << status
+                      << std::endl;
             throw std::runtime_error("call to waitpid failed");
         }
         if (!WIFEXITED(status))
@@ -540,20 +715,22 @@ void spawn_daemon(const std::string& file)
             throw std::runtime_error("async commit daemon failed");
         if (WEXITSTATUS(status) == 3)
             throw std::runtime_error("wrong db given to async daemon");
-
     }
     else { // Parent process, fork failed!
 
         throw std::runtime_error("Failed to spawn async commit");
     }
 }
-#else
-void spawn_daemon(const std::string& file) {}
 #endif
 
 
 } // anonymous namespace
 
+#if REALM_HAVE_STD_FILESYSTEM
+std::string SharedGroupOptions::sys_tmp_dir = std::filesystem::temp_directory_path().u8string();
+#else
+std::string SharedGroupOptions::sys_tmp_dir = getenv("TMPDIR") ? getenv("TMPDIR") : "";
+#endif
 
 // NOTES ON CREATION AND DESTRUCTION OF SHARED MUTEXES:
 //
@@ -573,95 +750,240 @@ void spawn_daemon(const std::string& file) {}
 // initializing process crashes and leaves the shared memory in an
 // undefined state.
 
-void SharedGroup::open(const std::string& path, bool no_create_file,
-                       DurabilityLevel dlevel, bool is_backend, const char* key)
+void SharedGroup::do_open(const std::string& path, bool no_create_file, bool is_backend,
+                          const SharedGroupOptions options)
 {
+    // Exception safety: Since do_open() is called from constructors, if it
+    // throws, it must leave the file closed.
+
+    // FIXME: Assess the exception safety of this function.
+
     REALM_ASSERT(!is_attached());
 
+#ifndef REALM_ASYNC_DAEMON
+    if (options.durability == Durability::Async)
+        throw std::runtime_error("Async mode not yet supported on Windows, iOS and watchOS");
+#endif
+
     m_db_path = path;
-    m_key = key;
+    m_coordination_dir = path + ".management";
     m_lockfile_path = path + ".lock";
+    try_make_dir(m_coordination_dir);
+    m_key = options.encryption_key;
+    m_lockfile_prefix = m_coordination_dir + "/access_control";
     SlabAlloc& alloc = m_group.m_alloc;
 
-    while (1) {
+#if REALM_METRICS
+    if (options.enable_metrics) {
+        m_metrics = std::make_shared<Metrics>();
+        m_group.set_metrics(m_metrics);
+    }
+#endif // REALM_METRICS
 
-        m_file.open(m_lockfile_path, File::access_ReadWrite, File::create_Auto, 0);
+    Replication::HistoryType openers_hist_type = Replication::hist_None;
+    int openers_hist_schema_version = 0;
+    bool opener_is_sync_agent = false;
+    if (Replication* repl = m_group.get_replication()) {
+        openers_hist_type = repl->get_history_type();
+        openers_hist_schema_version = repl->get_history_schema_version();
+        opener_is_sync_agent = repl->is_sync_agent();
+    }
+
+    int current_file_format_version;
+    int target_file_format_version;
+    int stored_hist_schema_version = -1; // Signals undetermined
+
+    int retries_left = 10; // number of times to retry before throwing exceptions
+    // in case there is something wrong with the .lock file... the retries allows
+    // us to pick a new lockfile initializer in case the first one crashes without
+    // completing the initialization
+    std::default_random_engine random_gen;
+    for (;;) {
+
+        // if we're retrying, we first wait a random time
+        if (retries_left < 10) {
+            if (retries_left == 9) { // we seed it from a true random source if possible
+                std::random_device r;
+                random_gen.seed(r());
+            }
+            int max_delay = (10 - retries_left) * 10;
+            int msecs = random_gen() % max_delay;
+            millisleep(msecs);
+        }
+
+        m_file.open(m_lockfile_path, File::access_ReadWrite, File::create_Auto, 0); // Throws
         File::CloseGuard fcg(m_file);
-        if (m_file.try_lock_exclusive()) {
 
+        if (m_file.try_lock_exclusive()) { // Throws
             File::UnlockGuard ulg(m_file);
 
-            // We're alone in the world, and it is Ok to initialize the file:
-            char empty_buf[sizeof (SharedInfo)];
-            std::fill(empty_buf, empty_buf+sizeof(SharedInfo), 0);
-            m_file.write(empty_buf, sizeof(SharedInfo));
+            // We're alone in the world, and it is Ok to initialize the
+            // file. Start by truncating the file to zero to ensure that
+            // the following resize will generate a file filled with zeroes.
+            // 
+            // This will in particular set m_init_complete to 0.
+            m_file.resize(0);
+            m_file.resize(sizeof(SharedInfo));
 
-            // Complete initialization of shared info via the memory mapping:
-            m_file_map.map(m_file, File::access_ReadWrite, sizeof (SharedInfo), File::map_NoSync);
-            File::UnmapGuard fug_1(m_file_map);
-            SharedInfo* info = m_file_map.get_addr();
-            new (info) SharedInfo(dlevel); // Throws
+            // We can crash anytime during this process. A crash prior to
+            // the first resize could allow another thread which could not
+            // get the exclusive lock because we hold it, and hence were
+            // waiting for the shared lock instead, to observe and use an
+            // old lock file.
+            m_file_map.map(m_file, File::access_ReadWrite, sizeof (SharedInfo),
+                           File::map_NoSync); // Throws
+            File::UnmapGuard fug(m_file_map);
+            SharedInfo* info_2 = m_file_map.get_addr();
+            
+            new (info_2) SharedInfo{options.durability, openers_hist_type,
+                                    openers_hist_schema_version}; // Throws
+            
+            // Because init_complete is an std::atomic, it's guaranteed not to be observable by others
+            // as being 1 before the entire SharedInfo header has been written.
+            info_2->init_complete = 1;
         }
 
-        // we hold the shared lock from here until we close the file!
-        m_file.lock_shared(); 
-
-        // Once we get the shared lock, we'll need to verify that the initialization of the
-        // lock file has been completed succesfully. The initializing process could have crashed
-        // during initialization. If so we must detect it and start all over again.
-
-        // wait for file to at least contain the basic shared info block
-        // NB! it might be larger due to expansion of the ring buffer.
-        size_t info_size;
-        if (int_cast_with_overflow_detect(m_file.get_size(), info_size))
-            throw std::runtime_error("Lock file too large");
-        
-        // Compile time validate the alignment of the first three fields in SharedInfo
-        REALM_STATIC_ASSERT(offsetof(SharedInfo,init_complete) == 0, "misalignment of init_complete");
-        REALM_STATIC_ASSERT(offsetof(SharedInfo,size_of_mutex) == 1, "misalignment of size_of_mutex");
-        REALM_STATIC_ASSERT(offsetof(SharedInfo,size_of_condvar) == 2, "misalignment of size_of_condvar");
-
-        // If this ever triggers we are on a really weird architecture 
-        REALM_STATIC_ASSERT(offsetof(SharedInfo,latest_version_number) == 16, "misalignment of latest_version_number");
-
-        // we need to have the size_of_mutex, size_of_condvar and init_complete
-        // fields available before we can check for compatibility
-        if (info_size < 4)
-            continue;
-
-        {
-            // Map the first fields to memory and validate them
-            m_file_map.map(m_file, File::access_ReadOnly, 4, File::map_NoSync);
-            File::UnmapGuard fug_1(m_file_map);
-
-            // validate initialization complete:
-            SharedInfo* info = m_file_map.get_addr();
-            if (info->init_complete == 0) {
-                continue;
-            }
-
-            // validate compatible sizes of mutex and condvar types. Sizes
-            // of all other fields are architecture independent, so if condvar
-            // and mutex sizes match, the entire struct matches.
-            if (info->size_of_mutex != sizeof(info->controlmutex))
-                throw IncompatibleLockFile();
-
-#ifndef _WIN32
-            if (info->size_of_condvar != sizeof(info->room_to_write))
-                throw IncompatibleLockFile();
+        // We hold the shared lock from here until we close the file!
+#if REALM_PLATFORM_APPLE
+        // macOS has a bug which can cause a hang waiting to obtain a lock, even
+        // if the lock is already open in shared mode, so we work around it by
+        // busy waiting. This should occur only briefly during session initialization.
+        while (!m_file.try_lock_shared()) {
+            sched_yield();
+        }
+#else
+        m_file.lock_shared(); // Throws
 #endif
+        // If the file is not completely initialized at this point in time, the
+        // preceeding initialization attempt must have failed. We know that an
+        // initialization process was in progress, because this thread (or
+        // process) failed to get an exclusive lock on the file. Because this
+        // thread (or process) currently has a shared lock on the file, we also
+        // know that the initialization process can no longer be in progress, so
+        // the initialization must either have completed or failed at this time.
+
+        // The file is taken to be completely initialized if it is large enough
+        // to contain the `init_complete` field, and `init_complete` is true. If
+        // the file was not completely initialized, this thread must give up its
+        // shared lock, and retry to become the initializer. Eventually, one of
+        // two things must happen; either this thread, or another thread
+        // succeeds in completing the initialization, or this thread becomes the
+        // initializer, and fails the initialization. In either case, the retry
+        // loop will eventually terminate.
+
+        // An empty file is (and was) never a successfully initialized file.
+        size_t info_size = sizeof(SharedInfo);
+        {
+            auto file_size = m_file.get_size();
+            if (util::int_less_than(file_size, info_size)) {
+                if (file_size == 0)
+                    continue; // Retry
+                info_size = size_t(file_size);
+            }
         }
 
-        // initialisation is complete and size and alignment matches for all fields in SharedInfo.
-        // so we can map the entire structure.
-        m_file_map.map(m_file, File::access_ReadWrite, sizeof (SharedInfo), File::map_NoSync);
+        // Map the initial section of the SharedInfo file that corresponds to
+        // the SharedInfo struct, or less if the file is smaller. We know that
+        // we have at least one byte, and that is enough to read the
+        // `init_complete` flag.
+        m_file_map.map(m_file, File::access_ReadWrite, info_size, File::map_NoSync);
         File::UnmapGuard fug_1(m_file_map);
         SharedInfo* info = m_file_map.get_addr();
 
+        // offsetof() is undefined for non-pod types but often behaves correct. 
+        // Since we just use it in static_assert(), a bug is caught at compile time
+        // which isn't critical. FIXME: See if there is a way to fix this, but it
+        // might not be trivial since it contains RobustMutex members and others
+#ifndef _WIN32
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
+#endif
+        static_assert(offsetof(SharedInfo, init_complete) + sizeof SharedInfo::init_complete <= 1,
+                      "Unexpected position or size of SharedInfo::init_complete");
+#ifndef _WIN32
+#pragma GCC diagnostic pop
+#endif
+        if (info->init_complete == 0)
+            continue;
+        REALM_ASSERT(info->init_complete == 1);
+
+        // At this time, we know that the file was completely initialized, but
+        // we still need to verify that is was initialized with the memory
+        // layout expected by this session participant. We could find that it is
+        // initializaed with a different memory layout if other concurrent
+        // session participants use different versions of the core library.
+        if (info_size < sizeof(SharedInfo)) {
+            if (retries_left) {
+                --retries_left;
+                continue;
+            }
+            std::stringstream ss;
+            ss << "Info size doesn't match, " << info_size << " " << sizeof(SharedInfo) << ".";
+            throw IncompatibleLockFile(ss.str());
+        }
+        if (info->shared_info_version != g_shared_info_version) {
+            if (retries_left) {
+                --retries_left;
+                continue;
+            }
+            std::stringstream ss;
+            ss << "Shared info version doesn't match, " << info->shared_info_version << " " << g_shared_info_version
+               << ".";
+            throw IncompatibleLockFile(ss.str());
+        }
+        // Validate compatible sizes of mutex and condvar types. Sizes of all
+        // other fields are architecture independent, so if condvar and mutex
+        // sizes match, the entire struct matches. The offsets of
+        // `size_of_mutex` and `size_of_condvar` are known to be as expected due
+        // to the preceeding check in `shared_info_version`.
+        if (info->size_of_mutex != sizeof info->shared_controlmutex) {
+            if (retries_left) {
+                --retries_left;
+                continue;
+            }
+            std::stringstream ss;
+            ss << "Mutex size doesn't match: " << info->size_of_mutex << " " << sizeof(info->shared_controlmutex)
+               << ".";
+            throw IncompatibleLockFile(ss.str());
+        }
+
+        if (info->size_of_condvar != sizeof info->room_to_write) {
+            if (retries_left) {
+                --retries_left;
+                continue;
+            }
+            std::stringstream ss;
+            ss << "Condtion var size doesn't match: " << info->size_of_condvar << " " << sizeof(info->room_to_write)
+               << ".";
+            throw IncompatibleLockFile(ss.str());
+        }
+
+        // Even though fields match wrt alignment and size, there may still be
+        // incompatibilities between implementations, so lets ask one of the
+        // mutexes if it thinks it'll work.
+        //
+        // FIXME: Calling util::RobustMutex::is_valid() on a mutex object of
+        // unknown, and possibly invalid state has undefined behaviour, and is
+        // therfore dangerous. It should not be done.
+        //
+        // FIXME: This check tries to lock the mutex, and only unlocks it if the
+        // return value is zero. If pthread_mutex_trylock() fails with
+        // EOWNERDEAD, this leads to deadlock during the following propper
+        // attempt to lock. This cannot be fixed by also unlocking on failure
+        // with EOWNERDEAD, because that would mark the mutex as consistent
+        // again and prevent us from being notified below.
+
+        m_writemutex.set_shared_part(info->shared_writemutex, m_lockfile_prefix, "write");
+#ifdef REALM_ASYNC_DAEMON
+        m_balancemutex.set_shared_part(info->shared_balancemutex, m_lockfile_prefix, "balance");
+#endif
+        m_controlmutex.set_shared_part(info->shared_controlmutex, m_lockfile_prefix, "control");
+
         // even though fields match wrt alignment and size, there may still be incompatibilities
         // between implementations, so lets ask one of the mutexes if it thinks it'll work.
-        if (!info->controlmutex.is_valid())
-            throw IncompatibleLockFile();
+        if (!m_controlmutex.is_valid()) {
+            throw IncompatibleLockFile("Control mutex is invalid.");
+        }
 
         // OK! lock file appears valid. We can now continue operations under the protection
         // of the controlmutex. The controlmutex protects the following activities:
@@ -671,170 +993,327 @@ void SharedGroup::open(const std::string& path, bool no_create_file,
         // - SharedGroup beginning/ending a session
         // - Waiting for and signalling database changes
         {
-            RobustLockGuard lock(info->controlmutex, &recover_from_dead_write_transact); // Throws
-            // Even though we checked init_complete before grabbing the write mutex,
-            // we do not need to check it again, because it is only changed under
-            // an exclusive file lock, and we checked it under a shared file lock
-
-            // proceed to initialize versioning and other metadata information related to
-            // the database. Also create the database if we're beginning a new session
-            bool begin_new_session = info->num_participants == 0;
-            bool is_shared = true;
-            bool read_only = false;
-            bool skip_validate = false;
-
-            // only the session initiator is allowed to create the database, all other
-            // must assume that it already exists.
-            bool no_create = begin_new_session ? no_create_file : true;
-
-            // If replication is enabled, we need to ask it whether we're in server-sync mode
-            // and check that the database is operated in the same mode.
-            bool server_sync_mode = false;
-#ifdef REALM_ENABLE_REPLICATION
-            Replication* repl = _impl::GroupFriend::get_replication(m_group);
-            if (repl)
-                server_sync_mode = repl->is_in_server_synchronization_mode();
-#endif
-            ref_type top_ref = alloc.attach_file(path, is_shared, read_only,
-                                                 no_create, skip_validate, key, server_sync_mode); // Throws
-            size_t file_size = alloc.get_baseline();
-
-            if (begin_new_session) {
-                // make sure the database is not on streaming format. This has to be done at
-                // session initialization, even if it means writing the database during open.
-                if (alloc.m_file_on_streaming_form) {
-                    util::File::Map<char> db_map;
-                    db_map.map(alloc.m_file, File::access_ReadWrite, file_size);
-                    File::UnmapGuard db_ug(db_map);
-                    alloc.prepare_for_update(db_map.get_addr(), db_map);
-                    db_map.sync();
-                }
-
-                // determine version
-                uint_fast64_t version;
-                Array top(alloc);
-                if (top_ref) {
-
-                    // top_ref is non-zero implying that the database has seen at least one commit,
-                    // so we can get the versioning info from the database
-                    top.init_from_ref(top_ref);
-                    if (top.size() <= 5) {
-                        // the database wasn't written by shared group, so no versioning info
-                        version = 1;
-                        REALM_ASSERT(! server_sync_mode);
-                    }
-                    else {
-                        // the database was written by shared group, so it has versioning info
-                        REALM_ASSERT(top.size() == 7);
-                        version = top.get(6) / 2;
-                        // In case this was written by an older version of shared group, it
-                        // will have version 0. Version 0 is not a legal initial version, so
-                        // it has to be set to 1 instead.
-                        if (version == 0)
-                            version = 1;
-                    }
-                }
-                else {
-                    // the database was just created, no metadata has been written yet.
-                    version = 1;
-                }
-#ifdef REALM_ENABLE_REPLICATION
-                // If replication is enabled, we need to inform it of the latest version,
-                // allowing it to discard any surplus log entries
-                repl = _impl::GroupFriend::get_replication(m_group);
-                if (repl)
-                    repl->reset_log_management(version);
-#endif
-
-#ifndef _WIN32
-                if (key) {
-                    REALM_STATIC_ASSERT(sizeof(pid_t) <= sizeof(uint64_t), "process identifiers too large");
-                    info->session_initiator_pid = uint64_t(getpid());
-                }
-#endif
-
-                info->latest_version_number = version;
-                info->init_versioning(top_ref, file_size, version);
-
-            }
-            else { // not the session initiator!
-#ifndef _WIN32
-                if (key && info->session_initiator_pid != uint64_t(getpid()))
-                    throw std::runtime_error(path + ": Encrypted interprocess sharing is currently unsupported");
-#endif
-
-            }
-#ifndef _WIN32
-            m_daemon_becomes_ready.set_shared_part(info->daemon_becomes_ready,m_db_path,0);
-            m_work_to_do.set_shared_part(info->work_to_do,m_db_path,1);
-            m_room_to_write.set_shared_part(info->room_to_write,m_db_path,2);
-            m_new_commit_available.set_shared_part(info->new_commit_available,m_db_path,3);
-            // In async mode, we need to make sure the daemon is running and ready:
-            if (dlevel == durability_Async && !is_backend) {
-                while (info->daemon_ready == false) {
-                    if (info->daemon_started == false) {
-                        spawn_daemon(path);
-                        info->daemon_started = true;
-                    }
-                    // FIXME: It might be more robust to sleep a little, then restart the loop
-                    // std::cerr << "Waiting for daemon" << std::endl;
-                    m_daemon_becomes_ready.wait(info->controlmutex, &recover_from_dead_write_transact, 0);
-                    // std::cerr << " - notified" << std::endl;
-                }
-            }
-            // std::cerr << "daemon should be ready" << std::endl;
-#endif
+            std::lock_guard<InterprocessMutex> lock(m_controlmutex); // Throws
             // we need a thread-local copy of the number of ringbuffer entries in order
-            // to detect concurrent expansion of the ringbuffer.
-            m_local_max_entry = 0;
+            // to later detect concurrent expansion of the ringbuffer.
+            m_local_max_entry = info->readers.get_num_entries();
 
             // We need to map the info file once more for the readers part
             // since that part can be resized and as such remapped which
             // could move our mutexes (which we don't want to risk moving while
             // they are locked)
-            m_reader_map.map(m_file, File::access_ReadWrite, sizeof (SharedInfo), File::map_NoSync);
+            size_t reader_info_size = sizeof(SharedInfo) + info->readers.compute_required_space(m_local_max_entry);
+            m_reader_map.map(m_file, File::access_ReadWrite, reader_info_size, File::map_NoSync);
             File::UnmapGuard fug_2(m_reader_map);
+
+            // proceed to initialize versioning and other metadata information related to
+            // the database. Also create the database if we're beginning a new session
+            bool begin_new_session = (info->num_participants == 0);
+            SlabAlloc::Config cfg;
+            cfg.session_initiator = begin_new_session;
+            cfg.is_shared = true;
+            cfg.read_only = false;
+            cfg.skip_validate = !begin_new_session;
+
+            // only the session initiator is allowed to create the database, all other
+            // must assume that it already exists.
+            cfg.no_create = (begin_new_session ? no_create_file : true);
+
+            // if we're opening a MemOnly file that isn't already opened by
+            // someone else then it's a file which should have been deleted on
+            // close previously, but wasn't (perhaps due to the process crashing)
+            cfg.clear_file = (options.durability == Durability::MemOnly && begin_new_session);
+
+            cfg.encryption_key = options.encryption_key;
+            ref_type top_ref;
+            try {
+                top_ref = alloc.attach_file(path, cfg); // Throws
+            }
+            catch (SlabAlloc::Retry&) {
+                continue;
+            }
+            // If we fail in any way, we must detach the allocator. Failure to do so
+            // will retain memory mappings in the mmap cache shared between allocators.
+            // This would allow other SharedGroups to reuse the mappings even in
+            // situations, where the database has been re-initialised (e.g. through
+            // compact()). This could render the mappings (partially) undefined.
+            SlabAlloc::DetachGuard alloc_detach_guard(alloc);
+
+            // Determine target file format version for session (upgrade
+            // required if greater than file format version of attached file).
+            using gf = _impl::GroupFriend;
+            current_file_format_version = alloc.get_committed_file_format_version();
+
+            bool file_format_ok = false;
+            // In shared mode (Realm file opened via a SharedGroup instance) this
+            // version of the core library is able to open Realms using file format
+            // versions from 2 to 9. Please see Group::get_file_format_version() for
+            // information about the individual file format versions.
+            switch (current_file_format_version) {
+                case 0:
+                    file_format_ok = (top_ref == 0);
+                    break;
+                case 2:
+                case 3:
+                case 4:
+                case 5:
+                case 6:
+                case 7:
+                case 8:
+                case 9:
+                    file_format_ok = true;
+                    break;
+            }
+
+            if (REALM_UNLIKELY(!file_format_ok))
+                throw InvalidDatabase("Unsupported Realm file format version", path);
+
+            target_file_format_version =
+                gf::get_target_file_format_version_for_session(current_file_format_version,
+                                                               openers_hist_type);
+
+            if (begin_new_session) {
+                // Determine version (snapshot number) and check history
+                // compatibility
+                version_type version = 0;
+                int stored_hist_type = 0;
+                gf::get_version_and_history_info(alloc, top_ref, version, stored_hist_type,
+                                                 stored_hist_schema_version);
+                bool good_history_type = false;
+                switch (openers_hist_type) {
+                    case Replication::hist_None:
+                        good_history_type = (stored_hist_type == Replication::hist_None);
+                        if (!good_history_type)
+                            throw IncompatibleHistories("Expected a Realm without history", path);
+                        break;
+                    case Replication::hist_OutOfRealm:
+                        REALM_ASSERT(false); // No longer in use
+                        break;
+                    case Replication::hist_InRealm:
+                        good_history_type = (stored_hist_type == Replication::hist_InRealm ||
+                                             stored_hist_type == Replication::hist_None);
+                        if (!good_history_type)
+                            throw IncompatibleHistories("Expected a Realm with no or in-realm history", path);
+                        break;
+                    case Replication::hist_SyncClient:
+                        good_history_type = ((stored_hist_type == Replication::hist_SyncClient) ||
+                                             (top_ref == 0));
+                        if (!good_history_type)
+                            throw IncompatibleHistories(
+                                "Expected an empty Realm or a Realm written by Realm Mobile Platform", path);
+                        break;
+                    case Replication::hist_SyncServer:
+                        good_history_type = ((stored_hist_type == Replication::hist_SyncServer) ||
+                                             (top_ref == 0));
+                        if (!good_history_type)
+                            throw IncompatibleHistories("Expected a Realm containing "
+                                                        "a server-side history",
+                                                        path);
+                        break;
+                }
+
+                REALM_ASSERT(stored_hist_schema_version >= 0 &&
+                             stored_hist_schema_version <= openers_hist_schema_version);
+                if (stored_hist_schema_version > openers_hist_schema_version)
+                    throw IncompatibleHistories("Unexpected future history schema version", path);
+                bool need_hist_schema_upgrade =
+                    (stored_hist_schema_version < openers_hist_schema_version && top_ref != 0);
+                if (need_hist_schema_upgrade) {
+                    Replication* repl = gf::get_replication(m_group);
+                    if (!repl->is_upgradable_history_schema(stored_hist_schema_version))
+                        throw IncompatibleHistories("Nonupgradable history schema", path);
+                }
+
+                if (Replication* repl = gf::get_replication(m_group))
+                    repl->initiate_session(version); // Throws
+
+                if (options.encryption_key) {
+#ifdef _WIN32
+                    uint64_t pid = GetCurrentProcessId();
+#else
+                    static_assert(sizeof(pid_t) <= sizeof(uint64_t), "process identifiers too large");
+                    uint64_t pid = getpid();
+#endif
+                    info->session_initiator_pid = pid;
+
+                }
+
+                info->file_format_version = uint_fast8_t(target_file_format_version);
+
+                // Initially there is a single version in the file
+                info->number_of_versions = 1;
+
+                info->latest_version_number = version;
+
+                SharedInfo* r_info = m_reader_map.get_addr();
+                size_t file_size = alloc.get_baseline();
+                r_info->init_versioning(top_ref, file_size, version);
+            }
+            else { // Not the session initiator
+                // Durability setting must be consistent across a session. An
+                // inconsistency is a logic error, as the user is required to
+                // make sure that all possible concurrent session participants
+                // use the same durability setting for the same Realm file.
+                if (Durability(info->durability) != options.durability)
+                    throw LogicError(LogicError::mixed_durability);
+
+                // History type must be consistent across a session. An
+                // inconsistency is a logic error, as the user is required to
+                // make sure that all possible concurrent session participants
+                // use the same history type for the same Realm file.
+                if (info->history_type != openers_hist_type)
+                    throw LogicError(LogicError::mixed_history_type);
+
+                // History schema version must be consistent across a
+                // session. An inconsistency is a logic error, as the user is
+                // required to make sure that all possible concurrent session
+                // participants use the same history schema version for the same
+                // Realm file.
+                if (info->history_schema_version != openers_hist_schema_version)
+                    throw LogicError(LogicError::mixed_history_schema_version);
+#ifdef _WIN32
+                uint64_t pid = GetCurrentProcessId();
+#else
+                uint64_t pid = getpid();
+#endif
+
+                if (options.encryption_key && info->session_initiator_pid != pid) {
+                    std::stringstream ss;
+                    ss << path << ": Encrypted interprocess sharing is currently unsupported."
+                       << "SharedGroup has been opened by pid: " << info->session_initiator_pid << ". Current pid is "
+                       << pid << ".";
+                    throw std::runtime_error(ss.str());
+                }
+
+                // We need per session agreement among all participants on the
+                // target Realm file format. From a technical perspective, the
+                // best way to ensure that, would be to require a bumping of the
+                // SharedInfo file format version on any change that could lead
+                // to a different result from
+                // get_target_file_format_for_session() given the same current
+                // Realm file format version and the same history type, as that
+                // would prevent the outcome of the Realm opening process from
+                // depending on race conditions. However, for practical reasons,
+                // we shall instead simply check that there is agreement, and
+                // throw the same kind of exception, as would have been thrown
+                // with a bumped SharedInfo file format version, if there isn't.
+                if (info->file_format_version != target_file_format_version) {
+                    std::stringstream ss;
+                    ss << "File format version deosn't match: " << info->file_format_version << " "
+                       << target_file_format_version << ".";
+                    throw IncompatibleLockFile(ss.str());
+                }
+
+                // We need to ensure that at most one sync agent can join a
+                // session
+                if (info->sync_agent_present && opener_is_sync_agent)
+                    throw MultipleSyncAgents{};
+
+                // Even though this session participant is not the session initiator,
+                // it may be the one that has to perform the history schema upgrade.
+                // See upgrade_file_format(). However we cannot get the actual value
+                // at this point as the allocator is not synchronized with the file.
+                // The value will be read in a ReadTransaction later.
+            }
+
+            m_new_commit_available.set_shared_part(info->new_commit_available, m_lockfile_prefix, "new_commit",
+                                                   options.temp_dir);
+            m_pick_next_writer.set_shared_part(info->pick_next_writer, m_lockfile_prefix, "pick_writer",
+                                                   options.temp_dir);
+#ifdef REALM_ASYNC_DAEMON
+            if (options.durability == Durability::Async) {
+                m_daemon_becomes_ready.set_shared_part(info->daemon_becomes_ready, m_lockfile_prefix, "daemon_ready",
+                                                       options.temp_dir);
+                m_work_to_do.set_shared_part(info->work_to_do, m_lockfile_prefix, "work_ready", options.temp_dir);
+                m_room_to_write.set_shared_part(info->room_to_write, m_lockfile_prefix, "allow_write",
+                                                options.temp_dir);
+                // In async mode, we need to make sure the daemon is running and ready:
+                if (!is_backend) {
+                    while (info->daemon_ready == 0) {
+                        if (info->daemon_started == 0) {
+                            spawn_daemon(path);
+                            info->daemon_started = 1;
+                        }
+                        // FIXME: It might be more robust to sleep a little, then restart the loop
+                        // std::cerr << "Waiting for daemon" << std::endl;
+                        m_daemon_becomes_ready.wait(m_controlmutex, 0);
+                        // std::cerr << " - notified" << std::endl;
+                    }
+                }
+            }
+// std::cerr << "daemon should be ready" << std::endl;
+#endif // REALM_ASYNC_DAEMON
 
             // Set initial version so we can track if other instances
             // change the db
-            m_readlock.m_version = get_current_version();
-
-            if (info->version != SHAREDINFO_VERSION)
-                throw std::runtime_error("Unsupported version");
-
-            // Durability level cannot be changed at runtime
-            if (info->flags != dlevel)
-                throw std::runtime_error("Inconsistent durability level");
+            m_read_lock.m_version = get_version_of_latest_snapshot();
 
             // make our presence noted:
             ++info->num_participants;
 
-            // Initially there is a single version in the file
-            info->number_of_versions = 1;
+            if (opener_is_sync_agent) {
+                REALM_ASSERT(!info->sync_agent_present);
+                info->sync_agent_present = 1; // Set to true
+            }
 
             // Initially wait_for_change is enabled
             m_wait_for_change_enabled = true;
 
             // Keep the mappings and file open:
+            alloc_detach_guard.release();
             fug_2.release(); // Do not unmap
             fug_1.release(); // Do not unmap
-            fcg.release(); // Do not close
+            fcg.release();   // Do not close
         }
         break;
     }
 
-    m_transact_stage = transact_Ready;
-    // std::cerr << "open completed" << std::endl;
+    set_transact_stage(transact_Ready);
+// std::cerr << "open completed" << std::endl;
 
-#ifndef _WIN32
-    if (dlevel == durability_Async) {
+#ifdef REALM_ASYNC_DAEMON
+    if (options.durability == Durability::Async) {
         if (is_backend) {
             do_async_commits();
         }
     }
+#else
+    static_cast<void>(is_backend);
 #endif
+
+    // Upgrade file format and/or history schema
+    try {
+        using gf = _impl::GroupFriend;
+        if (stored_hist_schema_version == -1) {
+            // current_hist_schema_version has not been read. Read it now
+            ReadTransaction rt(*this);
+            stored_hist_schema_version = gf::get_history_schema_version(m_group.m_alloc, m_read_lock.m_top_ref);
+        }
+        if (current_file_format_version == 0) {
+            // If the current file format is still undecided, no upgrade is
+            // necessary, but we still need to make the chosen file format
+            // visible to the rest of the core library by updating the value
+            // that will be subsequently returned by
+            // Group::get_file_format_version(). For this to work, all session
+            // participants must adopt the chosen target Realm file format when
+            // the stored file format version is zero regardless of the version
+            // of the core library used.
+            gf::set_file_format_version(m_group, target_file_format_version);
+        }
+        else {
+            gf::set_file_format_version(m_group, current_file_format_version);
+            upgrade_file_format(options.allow_file_format_upgrade, target_file_format_version,
+                                stored_hist_schema_version, openers_hist_schema_version); // Throws
+        }
+    }
+    catch (...) {
+        close();
+        throw;
+    }
 }
 
+// WARNING / FIXME: compact() should NOT be exposed publicly on Windows because it's not crash safe! It may
+// corrupt your database if something fails
 bool SharedGroup::compact()
 {
     // Verify that the database file is attached
@@ -845,85 +1324,91 @@ bool SharedGroup::compact()
     if (m_transact_stage != transact_Ready) {
         throw std::runtime_error(m_db_path + ": compact is not supported whithin a transaction");
     }
+    Durability dura;
     std::string tmp_path = m_db_path + ".tmp_compaction_space";
-    SharedInfo* info = m_file_map.get_addr();
-    RobustLockGuard lock(info->controlmutex, &recover_from_dead_write_transact); // Throws
-    if (info->num_participants > 1)
-        return false;
-
-    // group::write() will throw if the file already exists.
-    // To prevent this, we have to remove the file (should it exist)
-    // before calling group::write().
-    File::try_remove(tmp_path);
-
-    // Using begin_read here ensures that we have access to the latest and greatest entry
-    // in the ringbuffer. We need to have access to that later to update top_ref and file_size.
-    begin_read();
-
-    // Compact by writing a new file holding only live data, then renaming the new file
-    // so it becomes the database file, replacing the old one in the process.
-    m_group.write(tmp_path, m_key, info->latest_version_number);
-    rename(tmp_path.c_str(), m_db_path.c_str());
     {
-        SharedInfo* r_info = m_reader_map.get_addr();
-        Ringbuffer::ReadCount& rc = const_cast<Ringbuffer::ReadCount&>(r_info->readers.get_last());
-        REALM_ASSERT_3(rc.version, ==, info->latest_version_number);
-        static_cast<void>(rc); // rc unused if ENABLE_ASSERTION is unset
+        SharedInfo* info = m_file_map.get_addr();
+        std::unique_lock<InterprocessMutex> lock(m_controlmutex); // Throws
+        if (info->num_participants > 1)
+            return false;
+
+        // group::write() will throw if the file already exists.
+        // To prevent this, we have to remove the file (should it exist)
+        // before calling group::write().
+        File::try_remove(tmp_path);
+
+        // Using begin_read here ensures that we have access to the latest entry
+        // in the ringbuffer. We need to have access to that later to update top_ref and file_size.
+        // This is also needed to attach the group (get the proper top pointer, etc)
+        begin_read(); // Throws
+
+        // Compact by writing a new file holding only live data, then renaming the new file
+        // so it becomes the database file, replacing the old one in the process.
+        try {
+            File file;
+            file.open(tmp_path, File::access_ReadWrite, File::create_Must, 0);
+            m_group.write(file, m_key, info->latest_version_number); // Throws
+            // Data needs to be flushed to the disk before renaming.
+            bool disable_sync = get_disable_sync_to_disk();
+            if (!disable_sync)
+                file.sync(); // Throws
+        }
+        catch (...)
+        {
+            // If writing the compact version failed in any way, delete the partially written file to clean up disk
+            // space. This is so that we don't fail with 100% disk space used when compacting on a mostly full disk.
+            if (File::exists(tmp_path)) {
+                File::remove(tmp_path);
+            }
+            throw;
+        }
+        {
+            SharedInfo* r_info = m_reader_map.get_addr();
+            Ringbuffer::ReadCount& rc = const_cast<Ringbuffer::ReadCount&>(r_info->readers.get_last());
+            REALM_ASSERT_3(rc.version, ==, info->latest_version_number);
+            static_cast<void>(rc); // rc unused if ENABLE_ASSERTION is unset
+        }
+        end_read();
+        dura = Durability(info->durability);
+        // We need to release any shared mapping *before* releasing the control mutex.
+        // When someone attaches to the new database file, they *must* *not* see and
+        // reuse any existing memory mapping of the stale file.
+        m_group.m_alloc.detach();
+
+#ifdef _WIN32
+        util::File::copy(tmp_path, m_db_path);
+#else
+        util::File::move(tmp_path, m_db_path);
+#endif
+        close_internal(/* with lock held: */ std::move(lock));
+
     }
-    end_read();
-
-    // We must detach group complety to force it to fully refresh its accessors for use
-    // in later transactions
-    m_group.complete_detach();
-    SlabAlloc& alloc = m_group.m_alloc;
-
-    // close and reopen the database file.
-    alloc.detach();
-    bool skip_validate = false;
-    bool no_create = true;
-    bool read_only = false;
-    bool is_shared = true;
-    bool server_sync_mode = false;
-    ref_type top_ref = alloc.attach_file(m_db_path, is_shared, read_only, no_create, 
-                                         skip_validate, m_key, server_sync_mode); // Throws
-    size_t file_size = alloc.get_baseline();
-
-    // update the versioning info to match
-    SharedInfo* r_info = m_reader_map.get_addr();
-    Ringbuffer::ReadCount& rc = const_cast<Ringbuffer::ReadCount&>(r_info->readers.get_last());
-    REALM_ASSERT_3(rc.version, ==, info->latest_version_number);
-    rc.filesize = file_size;
-    rc.current_top = top_ref;
+    SharedGroupOptions new_options;
+    new_options.durability = dura;
+    new_options.encryption_key = m_key;
+    new_options.allow_file_format_upgrade = false;
+    do_open(m_db_path, true, false, new_options);
     return true;
 }
 
 uint_fast64_t SharedGroup::get_number_of_versions()
 {
     SharedInfo* info = m_file_map.get_addr();
-    RobustLockGuard lock(info->controlmutex, &recover_from_dead_write_transact); // Throws
+    std::lock_guard<InterprocessMutex> lock(m_controlmutex); // Throws
     return info->number_of_versions;
 }
-#ifdef REALM_ENABLE_REPLICATION
 
-void SharedGroup::open(Replication& repl, DurabilityLevel dlevel, const char* key)
-{
-    REALM_ASSERT(!is_attached());
-    std::string file = repl.get_database_path();
-    bool no_create   = false;
-    bool is_backend  = false;
-    typedef _impl::GroupFriend gf;
-    gf::set_replication(m_group, &repl);
-    open(file, no_create, dlevel, is_backend, key); // Throws
-}
-
-#endif
-
-SharedGroup::~SharedGroup() REALM_NOEXCEPT
+SharedGroup::~SharedGroup() noexcept
 {
     close();
 }
 
-void SharedGroup::close() REALM_NOEXCEPT
+void SharedGroup::close() noexcept
+{
+    close_internal(std::unique_lock<InterprocessMutex>(m_controlmutex, std::defer_lock));
+}
+
+void SharedGroup::close_internal(std::unique_lock<InterprocessMutex> lock) noexcept
 {
     if (!is_attached())
         return;
@@ -938,10 +1423,25 @@ void SharedGroup::close() REALM_NOEXCEPT
             rollback();
             break;
     }
-
+    m_group.detach();
+    set_transact_stage(transact_Ready);
     SharedInfo* info = m_file_map.get_addr();
     {
-        RobustLockGuard lock(info->controlmutex, recover_from_dead_write_transact);
+        bool is_sync_agent = false;
+        if (Replication* repl = m_group.get_replication())
+            is_sync_agent = repl->is_sync_agent();
+
+        if (!lock.owns_lock())
+            lock.lock();
+
+        if (m_group.m_alloc.is_attached())
+            m_group.m_alloc.detach();
+
+        if (is_sync_agent) {
+            REALM_ASSERT(info->sync_agent_present);
+            info->sync_agent_present = 0; // Set to false
+        }
+
         --info->num_participants;
         bool end_of_session = info->num_participants == 0;
         // std::cerr << "closing" << std::endl;
@@ -949,60 +1449,56 @@ void SharedGroup::close() REALM_NOEXCEPT
 
             // If the db file is just backing for a transient data structure,
             // we can delete it when done.
-            if (info->flags == durability_MemOnly) {
+            if (Durability(info->durability) == Durability::MemOnly) {
                 try {
-                    m_group.m_alloc.detach();
                     util::File::remove(m_db_path.c_str());
                 }
-                catch(...) {} // ignored on purpose.
+                catch (...) {
+                } // ignored on purpose.
             }
-#ifdef REALM_ENABLE_REPLICATION
-            // If replication is enabled, we need to stop log management:
-            Replication* repl = _impl::GroupFriend::get_replication(m_group);
-            if (repl) {
-#ifdef _WIN32
-                try {
-                    repl->stop_logging();
-                }
-                catch(...) {} // FIXME, on Windows, stop_logging() fails to delete a file because it's open
-#else
-                repl->stop_logging();
-#endif
-
-            }
-#endif
+            using gf = _impl::GroupFriend;
+            if (Replication* repl = gf::get_replication(m_group))
+                repl->terminate_session();
         }
+        lock.unlock();
     }
+#ifdef REALM_ASYNC_DAEMON
+    m_room_to_write.close();
+    m_work_to_do.close();
+    m_daemon_becomes_ready.close();
+#endif
+    m_new_commit_available.close();
+    m_pick_next_writer.close();
+
+    // On Windows it is important that we unmap before unlocking, else a SetEndOfFile() call from another thread may
+    // interleave which is not permitted on Windows. It is permitted on *nix.
+    m_file_map.unmap();
+    m_reader_map.unmap();
     m_file.unlock();
     // info->~SharedInfo(); // DO NOT Call destructor
     m_file.close();
-    m_file_map.unmap();
-    m_reader_map.unmap();
 }
 
 bool SharedGroup::has_changed()
 {
-    bool changed = m_readlock.m_version != get_current_version();
+    bool changed = m_read_lock.m_version != get_version_of_latest_snapshot();
     return changed;
 }
 
-#ifndef _WIN32
-#ifndef __APPLE__
 bool SharedGroup::wait_for_change()
 {
     SharedInfo* info = m_file_map.get_addr();
-    RobustLockGuard lock(info->controlmutex, recover_from_dead_write_transact);
-    while (m_readlock.m_version == info->latest_version_number && m_wait_for_change_enabled) {
-        m_new_commit_available.wait(info->controlmutex, &recover_from_dead_write_transact, 0);
+    std::lock_guard<InterprocessMutex> lock(m_controlmutex);
+    while (m_read_lock.m_version == info->latest_version_number && m_wait_for_change_enabled) {
+        m_new_commit_available.wait(m_controlmutex, 0);
     }
-    return m_readlock.m_version != info->latest_version_number;
+    return m_read_lock.m_version != info->latest_version_number;
 }
 
 
 void SharedGroup::wait_for_change_release()
 {
-    SharedInfo* info = m_file_map.get_addr();
-    RobustLockGuard lock(info->controlmutex, recover_from_dead_write_transact);
+    std::lock_guard<InterprocessMutex> lock(m_controlmutex);
     m_wait_for_change_enabled = false;
     m_new_commit_available.notify_all();
 }
@@ -1010,12 +1506,40 @@ void SharedGroup::wait_for_change_release()
 
 void SharedGroup::enable_wait_for_change()
 {
-    SharedInfo* info = m_file_map.get_addr();
-    RobustLockGuard lock(info->controlmutex, recover_from_dead_write_transact);
+    std::lock_guard<InterprocessMutex> lock(m_controlmutex);
     m_wait_for_change_enabled = true;
 }
+
+void SharedGroup::set_transact_stage(SharedGroup::TransactStage stage) noexcept
+{
+#if REALM_METRICS
+    if (m_metrics) { // null if metrics are disabled
+        size_t total_size = m_used_space + m_free_space;
+        size_t free_space = m_free_space;
+        size_t num_objects = m_group.m_total_rows;
+        size_t num_available_versions = static_cast<size_t>(get_number_of_versions());
+
+        if (stage == transact_Reading) {
+            if (m_transact_stage == transact_Writing) {
+                m_metrics->end_write_transaction(total_size, free_space, num_objects, num_available_versions);
+            }
+            m_metrics->start_read_transaction();
+        } else if (stage == transact_Writing) {
+            if (m_transact_stage == transact_Reading) {
+                m_metrics->end_read_transaction(total_size, free_space, num_objects, num_available_versions);
+            }
+            m_metrics->start_write_transaction();
+        } else if (stage == transact_Ready) {
+            m_metrics->end_read_transaction(total_size, free_space, num_objects, num_available_versions);
+            m_metrics->end_write_transaction(total_size, free_space, num_objects, num_available_versions);
+        }
+    }
 #endif
 
+    m_transact_stage = stage;
+}
+
+#ifdef REALM_ASYNC_DAEMON
 void SharedGroup::do_async_commits()
 {
     bool shutdown = false;
@@ -1024,19 +1548,21 @@ void SharedGroup::do_async_commits()
     // We always want to keep a read lock on the last version
     // that was commited to disk, to protect it against being
     // overwritten by commits being made to memory by others.
-    bool dummy;
-    grab_latest_readlock(m_readlock, dummy);
+    {
+        VersionID version_id = VersionID();      // Latest available snapshot
+        grab_read_lock(m_read_lock, version_id); // Throws
+    }
     // we must treat version and version_index the same way:
     {
-        RobustLockGuard lock(info->controlmutex, &recover_from_dead_write_transact);
+        std::lock_guard<InterprocessMutex> lock(m_controlmutex);
         info->free_write_slots = max_write_slots;
-        info->daemon_ready = true;
+        info->daemon_ready = 1;
         m_daemon_becomes_ready.notify_all();
     }
-    m_group.detach();
+    using gf = _impl::GroupFriend;
+    gf::detach(m_group);
 
-    while(true) {
-
+    while (true) {
         if (m_file.is_removed()) { // operator removed the lock file. take a hint!
 
             shutdown = true;
@@ -1046,20 +1572,23 @@ void SharedGroup::do_async_commits()
         }
 
         bool is_same;
-        ReadLockInfo next_readlock = m_readlock;
+        ReadLockInfo next_read_lock = m_read_lock;
         {
             // detect if we're the last "client", and if so, shutdown (must be under lock):
-            RobustLockGuard lock2(info->writemutex, &recover_from_dead_write_transact);
-            RobustLockGuard lock(info->controlmutex, &recover_from_dead_write_transact);
-            grab_latest_readlock(next_readlock, is_same);
+            std::lock_guard<InterprocessMutex> lock2(m_writemutex);
+            std::lock_guard<InterprocessMutex> lock(m_controlmutex);
+            version_type old_version = next_read_lock.m_version;
+            VersionID version_id = VersionID(); // Latest available snapshot
+            grab_read_lock(next_read_lock, version_id);
+            is_same = (next_read_lock.m_version == old_version);
             if (is_same && (shutdown || info->num_participants == 1)) {
 #ifdef REALM_ENABLE_LOGFILE
                 std::cerr << "Daemon exiting nicely" << std::endl << std::endl;
 #endif
-                release_readlock(next_readlock);
-                release_readlock(m_readlock);
-                info->daemon_started = false;
-                info->daemon_ready = false;
+                release_read_lock(next_read_lock);
+                release_read_lock(m_read_lock);
+                info->daemon_started = 0;
+                info->daemon_ready = 0;
                 return;
             }
         }
@@ -1067,12 +1596,11 @@ void SharedGroup::do_async_commits()
         if (!is_same) {
 
 #ifdef REALM_ENABLE_LOGFILE
-            std::cerr << "Syncing from version " << m_readlock.m_version
-                 << " to " << next_readlock.m_version << std::endl;
+            std::cerr << "Syncing from version " << m_read_lock.m_version << " to " << next_read_lock.m_version
+                      << std::endl;
 #endif
             GroupWriter writer(m_group);
-            writer.commit(next_readlock.m_top_ref);
-
+            writer.commit(next_read_lock.m_top_ref);
 #ifdef REALM_ENABLE_LOGFILE
             std::cerr << "..and Done" << std::endl;
 #endif
@@ -1080,10 +1608,10 @@ void SharedGroup::do_async_commits()
 
         // Now we can release the version that was previously commited
         // to disk and just keep the lock on the latest version.
-        release_readlock(m_readlock);
-        m_readlock = next_readlock;
+        release_read_lock(m_read_lock);
+        m_read_lock = next_read_lock;
 
-        info->balancemutex.lock(&recover_from_dead_write_transact);
+        m_balancemutex.lock();
 
         // We have caught up with the writers, let them know that there are
         // now free write slots, wakeup any that has been suspended.
@@ -1101,252 +1629,398 @@ void SharedGroup::do_async_commits()
             gettimeofday(&tv, nullptr);
             ts.tv_sec = tv.tv_sec;
             ts.tv_nsec = tv.tv_usec * 1000;
-            ts.tv_nsec += 10000000; // 10 msec
+            ts.tv_nsec += 10000000;         // 10 msec
             if (ts.tv_nsec >= 1000000000) { // overflow
                 ts.tv_nsec -= 1000000000;
                 ts.tv_sec += 1;
             }
 
             // no timeout support if the condvars are only emulated, so this will assert
-            m_work_to_do.wait(info->balancemutex, &recover_from_dead_write_transact, &ts);
+            m_work_to_do.wait(m_balancemutex, &ts);
         }
-        info->balancemutex.unlock();
-
+        m_balancemutex.unlock();
     }
 }
-#endif // _WIN32
+#endif // REALM_ASYNC_DAEMON
 
 
-void SharedGroup::grab_latest_readlock(ReadLockInfo& readlock, bool& same_as_before)
+void SharedGroup::upgrade_file_format(bool allow_file_format_upgrade,
+                                      int target_file_format_version,
+                                      int current_hist_schema_version,
+                                      int target_hist_schema_version)
 {
-    for (;;) {
-        SharedInfo* r_info = m_reader_map.get_addr();
-        readlock.m_reader_idx = r_info->readers.last();
-        if (grow_reader_mapping(readlock.m_reader_idx)) { // throws
-            // remapping takes time, so retry with a fresh entry
-            continue;
+    // In a multithreaded scenario multiple threads may initially see a need to
+    // upgrade (maybe_upgrade == true) even though one onw thread is supposed to
+    // perform the upgrade, but that is ok, because the condition is rechecked
+    // in a fully reliable way inside a transaction.
+
+    // First a non-threadsafe but fast check
+    using gf = _impl::GroupFriend;
+    int current_file_format_version = gf::get_file_format_version(m_group);
+    REALM_ASSERT(current_file_format_version <= target_file_format_version);
+    REALM_ASSERT(current_hist_schema_version <= target_hist_schema_version);
+    bool maybe_upgrade_file_format = (current_file_format_version < target_file_format_version);
+    bool maybe_upgrade_hist_schema = (current_hist_schema_version < target_hist_schema_version);
+    bool maybe_upgrade = maybe_upgrade_file_format || maybe_upgrade_hist_schema;
+    if (maybe_upgrade) {
+
+#ifdef REALM_DEBUG
+// This sleep() only exists in order to increase the quality of the
+// TEST(Upgrade_Database_2_3_Writes_New_File_Format_new) unit test.
+// The unit test creates multiple threads that all call
+// upgrade_file_format() simultaneously. This sleep() then acts like
+// a simple thread barrier that makes sure the threads meet here, to
+// increase the likelyhood of detecting any potential race problems.
+// See the unit test for details.
+//
+// NOTE: This sleep has been disabled because no problems have been found with
+// this code in a long while, and it was dramatically slowing down a unit test
+// in realm-sync.
+
+        // millisleep(200);
+#endif
+
+        WriteTransaction wt(*this);
+        bool dirty = false;
+
+        // File format upgrade
+        int current_file_format_version_2 = gf::get_committed_file_format_version(m_group);
+        // The file must either still be using its initial file_format or have
+        // been upgraded already to the chosen target file format via a
+        // concurrent SharedGroup object.
+        REALM_ASSERT(current_file_format_version_2 == current_file_format_version ||
+                     current_file_format_version_2 == target_file_format_version);
+        bool need_file_format_upgrade = (current_file_format_version_2 < target_file_format_version);
+        if (need_file_format_upgrade) {
+            if (!allow_file_format_upgrade)
+                throw FileFormatUpgradeRequired();
+            gf::upgrade_file_format(m_group, target_file_format_version); // Throws
+            // Note: The file format version stored in the Realm file will be
+            // updated to the new file format version as part of the following
+            // commit operation. This happens in GroupWriter::commit().
+            if (m_upgrade_callback)
+                m_upgrade_callback(current_file_format_version_2, target_file_format_version); // Throws
+            dirty = true;
         }
-        const Ringbuffer::ReadCount& r = r_info->readers.get(readlock.m_reader_idx);
-        // if the entry is stale and has been cleared by the cleanup process,
-        // we need to start all over again. This is extremely unlikely, but possible.
-        if (! atomic_double_inc_if_even(r.count)) // <-- most of the exec time spent here!
-            continue;
-        same_as_before       = readlock.m_version == r.version;
-        readlock.m_version   = r.version;
-        readlock.m_top_ref   = to_size_t(r.current_top);
-        readlock.m_file_size = to_size_t(r.filesize);
-        return;
+        else {
+            // If somebody else has already performed the upgrade, we still need
+            // to inform the rest of the core library about the new file format
+            // of the attached file.
+            gf::set_file_format_version(m_group, target_file_format_version);
+        }
+
+        // History schema upgrade
+        int current_hist_schema_version_2 = gf::get_history_schema_version(m_group);
+        // The history must either still be using its initial schema or have
+        // been upgraded already to the chosen target schema version via a
+        // concurrent SharedGroup object.
+        REALM_ASSERT(current_hist_schema_version_2 == current_hist_schema_version ||
+                     current_hist_schema_version_2 == target_hist_schema_version);
+        bool need_hist_schema_upgrade = (current_hist_schema_version_2 < target_hist_schema_version);
+        if (need_hist_schema_upgrade) {
+            if (!allow_file_format_upgrade)
+                throw FileFormatUpgradeRequired();
+            Replication* repl = m_group.get_replication();
+            repl->upgrade_history_schema(current_hist_schema_version_2); // Throws
+            gf::set_history_schema_version(m_group, target_hist_schema_version); // Throws
+            dirty = true;
+        }
+
+        if (dirty)
+            commit(); // Throws
     }
 }
+
 
 SharedGroup::VersionID SharedGroup::get_version_of_current_transaction()
 {
-    return VersionID(m_readlock.m_version, m_readlock.m_reader_idx);
-}
-
-bool SharedGroup::grab_specific_readlock(ReadLockInfo& readlock, bool& same_as_before, 
-					 VersionID specific_version)
-{
-    for (;;) {
-        SharedInfo* r_info = m_reader_map.get_addr();
-        readlock.m_reader_idx = specific_version.index;
-        if (grow_reader_mapping(readlock.m_reader_idx)) { // throws
-            // remapping takes time, so retry with a fresh entry
-            continue;
-        }
-        const Ringbuffer::ReadCount& r = r_info->readers.get(readlock.m_reader_idx);
-
-        // if the entry is stale and has been cleared by the cleanup process,
-        // the requested version is no longer available
-        if (! atomic_double_inc_if_even(r.count)) // <-- most of the exec time spent here!
-            return false;
-
-        // we managed to lock an entry in the ringbuffer, but it may be so old that
-        // the version doesn't match the specific request. In that case we must release and fail
-        if (r.version != specific_version.version) {
-            atomic_double_dec(r.count); // <-- release
-            return false;
-        }
-        same_as_before       = readlock.m_version == r.version;
-        readlock.m_version   = r.version;
-        readlock.m_top_ref   = to_size_t(r.current_top);
-        readlock.m_file_size = to_size_t(r.filesize);
-        return true;
-    }
+    return VersionID(m_read_lock.m_version, m_read_lock.m_reader_idx);
 }
 
 
-const Group& SharedGroup::begin_read(VersionID specific_version)
+void SharedGroup::release_read_lock(ReadLockInfo& read_lock) noexcept
 {
-    REALM_ASSERT(m_transact_stage == transact_Ready);
-
-    bool same_version_as_before;
-    if (specific_version.version) {
-        bool success = grab_specific_readlock(m_readlock, same_version_as_before, specific_version);
-        if (!success)
-            throw UnreachableVersion();
-    }
-    else {
-        grab_latest_readlock(m_readlock, same_version_as_before);
-    }
-    if (same_version_as_before && m_group.may_reattach_if_same_version()) {
-        m_group.reattach_from_retained_data();
-    }
-    else {
-        // Prepare the group for a new transaction. A zero top ref
-        // means that the file has just been created.
-        try {
-            m_group.init_for_transact(m_readlock.m_top_ref, m_readlock.m_file_size); // Throws
-        }
-        catch (...) {
-            end_read();
-            throw;
-        }
-    }
-    m_transact_stage = transact_Reading;
-
-    return m_group;
-}
-
-
-void SharedGroup::release_readlock(ReadLockInfo& readlock) REALM_NOEXCEPT
-{
+    // The release may be tried on a version imported from a different thread,
+    // hence generated on a different shared group, which may have memory mapped
+    // a larger ringbuffer than we - so make sure we've mapped enough of the
+    // ringbuffer to access the chosen ringbuffer entry.
+    grow_reader_mapping(read_lock.m_reader_idx);
     SharedInfo* r_info = m_reader_map.get_addr();
-    const Ringbuffer::ReadCount& r = r_info->readers.get(readlock.m_reader_idx);
+    const Ringbuffer::ReadCount& r = r_info->readers.get(read_lock.m_reader_idx);
     atomic_double_dec(r.count); // <-- most of the exec time spent here
 }
 
 
-void SharedGroup::end_read() REALM_NOEXCEPT
+void SharedGroup::grab_read_lock(ReadLockInfo& read_lock, VersionID version_id)
 {
-    if (!m_group.is_attached())
-        return;
-
-    REALM_ASSERT(m_transact_stage == transact_Reading);
-    REALM_ASSERT(m_readlock.m_version != std::numeric_limits<size_t>::max());
-
-    release_readlock(m_readlock);
-
-    // The read may have allocated some temporary state
-    m_group.detach_but_retain_data();
-    m_transact_stage = transact_Ready;
-}
-
-#ifdef REALM_ENABLE_REPLICATION
-
-void SharedGroup::promote_to_write()
-{
-    REALM_ASSERT(m_transact_stage == transact_Reading);
-
-#ifdef REALM_ENABLE_REPLICATION
-    if (Replication* repl = m_group.get_replication()) {
-        repl->begin_write_transact(*this); // Throws
-        try {
-            do_begin_write();
-            advance_read();
+    if (version_id.version == std::numeric_limits<version_type>::max()) {
+        for (;;) {
+            SharedInfo* r_info = m_reader_map.get_addr();
+            read_lock.m_reader_idx = r_info->readers.last();
+            if (grow_reader_mapping(read_lock.m_reader_idx)) { // Throws
+                // remapping takes time, so retry with a fresh entry
+                continue;
+            }
+            r_info = m_reader_map.get_addr();
+            const Ringbuffer::ReadCount& r = r_info->readers.get(read_lock.m_reader_idx);
+            // if the entry is stale and has been cleared by the cleanup process,
+            // we need to start all over again. This is extremely unlikely, but possible.
+            if (!atomic_double_inc_if_even(r.count)) // <-- most of the exec time spent here!
+                continue;
+            read_lock.m_version = r.version;
+            read_lock.m_top_ref = to_size_t(r.current_top);
+            read_lock.m_file_size = to_size_t(r.filesize);
+            return;
         }
-        catch (...) {
-            repl->rollback_write_transact(*this);
-            throw;
+    }
+
+    for (;;) {
+        SharedInfo* r_info = m_reader_map.get_addr();
+        read_lock.m_reader_idx = version_id.index;
+        if (grow_reader_mapping(read_lock.m_reader_idx)) { // Throws
+            // remapping takes time, so retry with a fresh entry
+            continue;
         }
-        m_transact_stage = transact_Writing;
+        r_info = m_reader_map.get_addr();
+        const Ringbuffer::ReadCount& r = r_info->readers.get(read_lock.m_reader_idx);
+
+        // if the entry is stale and has been cleared by the cleanup process,
+        // the requested version is no longer available
+        while (!atomic_double_inc_if_even(r.count)) { // <-- most of the exec time spent here!
+            // we failed to lock the version. This could be because the version
+            // is being cleaned up, but also because the cleanup is probing for access
+            // to it. If it's being probed, the tail ptr of the ringbuffer will point
+            // to it. If so we retry. If the tail ptr points somewhere else, the entry
+            // has been cleaned up.
+            if (&r_info->readers.get_oldest() != &r)
+                throw BadVersion();
+        }
+        // we managed to lock an entry in the ringbuffer, but it may be so old that
+        // the version doesn't match the specific request. In that case we must release and fail
+        if (r.version != version_id.version) {
+            atomic_double_dec(r.count); // <-- release
+            throw BadVersion();
+        }
+        read_lock.m_version = r.version;
+        read_lock.m_top_ref = to_size_t(r.current_top);
+        read_lock.m_file_size = to_size_t(r.filesize);
         return;
     }
+}
+
+
+const Group& SharedGroup::begin_read(VersionID version_id)
+{
+    if (m_transact_stage != transact_Ready)
+        throw LogicError(LogicError::wrong_transact_state);
+
+    bool writable = false;
+    do_begin_read(version_id, writable); // Throws
+
+    set_transact_stage(transact_Reading);
+    return m_group;
+}
+
+#ifdef _MSC_VER
+#pragma warning (disable: 4297) // throw in noexcept
+#endif
+void SharedGroup::end_read() noexcept
+{
+    if (m_transact_stage == transact_Ready)
+        return; // Idempotency
+
+    if (m_transact_stage != transact_Reading)
+        throw LogicError(LogicError::wrong_transact_state);
+
+    do_end_read();
+
+    set_transact_stage(transact_Ready);
+}
+#ifdef _MSC_VER
+#pragma warning (default: 4297)
 #endif
 
-    do_begin_write();
-
-    // Advance to latest state (accessor update)
-    advance_read();
-    m_transact_stage = transact_Writing;
-}
-
-
-void SharedGroup::advance_read(VersionID specific_version)
-{
-    REALM_ASSERT(m_transact_stage == transact_Reading);
-
-    ReadLockInfo old_readlock = m_readlock;
-    bool same_as_before;
-    Replication* repl = _impl::GroupFriend::get_replication(m_group);
-
-    // we cannot move backward in time (yet)
-    if (specific_version.version && specific_version.version < old_readlock.m_version) {
-        throw UnreachableVersion();
-    }
-
-    // advance current readlock while holding onto old one - we MUST hold onto
-    // the old readlock until after the call to advance_transact. Once a readlock
-    // is released, the release may propagate to the commit log management, causing
-    // it to reclaim memory for old commit logs. We must finished use of the commit log
-    // before allowing that to happen.
-    if (specific_version.version) {
-        bool success = grab_specific_readlock(m_readlock, same_as_before, specific_version);
-        if (!success) 
-            throw UnreachableVersion();
-    }
-    else {
-        grab_latest_readlock(m_readlock, same_as_before); // Throws
-    }
-    if (same_as_before) {
-        release_readlock(old_readlock);
-        return;
-    }
-
-    // If the new top-ref is zero, then the previous top-ref must have
-    // been zero too, and we are still seing an empty Realm file
-    // (note that this is possible even if the version has
-    // changed). The purpose of the early-out in this case, is to
-    // retain the temporary arrays that were created earlier by
-    // Group::init_for_transact() to put the group accessor into a
-    // valid state.
-    if (m_readlock.m_top_ref == 0) {
-        release_readlock(old_readlock);
-        return;
-    }
-
-    // We know that the log_registry already knows about the new_version,
-    // because in order for us to get the new version when we grab the
-    // readlock, the new version must have been entered into the ringbuffer.
-    // commit always updates the replication log BEFORE updating the ringbuffer.
-    std::unique_ptr<BinaryData[]>
-        logs(new BinaryData[m_readlock.m_version-old_readlock.m_version]); // Throws
-
-    repl->get_commit_entries(old_readlock.m_version, m_readlock.m_version, logs.get());
-
-    m_group.advance_transact(m_readlock.m_top_ref, m_readlock.m_file_size,
-                             logs.get(),
-                             logs.get() + (m_readlock.m_version-old_readlock.m_version)); // Throws
-
-    // OK to release the readlock here:
-    release_readlock(old_readlock);
-}
-
-#endif // REALM_ENABLE_REPLICATION
 
 Group& SharedGroup::begin_write()
 {
-    REALM_ASSERT(m_transact_stage == transact_Ready);
+    if (m_transact_stage != transact_Ready)
+        throw LogicError(LogicError::wrong_transact_state);
 
-#ifdef REALM_ENABLE_REPLICATION
-    if (Replication* repl = m_group.get_replication())
-        repl->begin_write_transact(*this); // Throws
-#endif
-
+    do_begin_write(); // Throws
     try {
-        do_begin_write();
-        begin_read(0);
+        // We can be sure that do_begin_read() will bind to the latest snapshot,
+        // since no other write transaction can be initated while we hold the
+        // write mutex.
+        VersionID version_id = VersionID(); // Latest available snapshot
+        bool writable = true;
+        do_begin_read(version_id, writable); // Throws
+
+        if (Replication* repl = m_group.get_replication()) {
+            version_type current_version = m_read_lock.m_version;
+            bool history_updated = false;
+            repl->initiate_transact(current_version, history_updated); // Throws
+        }
     }
     catch (...) {
-#ifdef REALM_ENABLE_REPLICATION
-        if (Replication* repl = m_group.get_replication())
-            repl->rollback_write_transact(*this);
-#endif
+        do_end_write();
         throw;
     }
 
-    m_transact_stage = transact_Writing;
+    set_transact_stage(transact_Writing);
     return m_group;
+}
+
+bool SharedGroup::try_begin_write(Group* &group)
+{
+    if (m_transact_stage != transact_Ready)
+        throw LogicError(LogicError::wrong_transact_state);
+
+    bool success = do_try_begin_write(); // Throws
+    if (!success) return false;
+    try {
+        // We can be sure that do_begin_read() will bind to the latest snapshot,
+        // since no other write transaction can be initated while we hold the
+        // write mutex.
+        VersionID version_id = VersionID(); // Latest available snapshot
+        bool writable = true;
+        do_begin_read(version_id, writable); // Throws
+
+        if (Replication* repl = m_group.get_replication()) {
+            version_type current_version = m_read_lock.m_version;
+            bool history_updated = false;
+            repl->initiate_transact(current_version, history_updated); // Throws
+        }
+    }
+    catch (...) {
+        do_end_write();
+        throw;
+    }
+
+    set_transact_stage(transact_Writing);
+    group = &m_group;
+    return true;
+}
+
+
+SharedGroup::version_type SharedGroup::commit()
+{
+    if (m_transact_stage != transact_Writing)
+        throw LogicError(LogicError::wrong_transact_state);
+
+    REALM_ASSERT(m_group.is_attached());
+
+    version_type new_version = do_commit(); // Throws
+
+    // We need to set m_read_lock in order for wait_for_change to work.
+    // To set it, we grab a readlock on the latest available snapshot
+    // and release it again.
+    VersionID version_id = VersionID(); // Latest available snapshot
+    ReadLockInfo lock_after_commit;
+    grab_read_lock(lock_after_commit, version_id);
+    release_read_lock(lock_after_commit);
+
+    do_end_write();
+
+    // Free memory that was allocated during the write transaction.
+    using gf = _impl::GroupFriend;
+    gf::reset_free_space_tracking(m_group); // Throws
+
+    do_end_read();
+    m_read_lock = lock_after_commit;
+    set_transact_stage(transact_Ready);
+    return new_version;
+}
+
+#ifdef _MSC_VER
+#pragma warning (disable: 4297) // throw in noexcept
+#endif
+void SharedGroup::rollback() noexcept
+{
+    if (m_transact_stage == transact_Ready)
+        return; // Idempotency
+
+    // FIXME: Find common/better method for error handling (throw from noexcept, and 
+    // pin_version() asserts instead).
+    if (m_transact_stage != transact_Writing)
+        throw LogicError(LogicError::wrong_transact_state);
+
+    do_end_write();
+    do_end_read();
+
+    if (Replication* repl = m_group.get_replication())
+        repl->abort_transact();
+
+    set_transact_stage(transact_Ready);
+}
+#ifdef _MSC_VER
+#pragma warning (default: 4297)
+#endif
+
+SharedGroup::VersionID SharedGroup::pin_version()
+{
+    REALM_ASSERT(m_transact_stage != transact_Ready);
+
+    // Get current version
+    VersionID version_id(m_read_lock.m_version, m_read_lock.m_reader_idx);
+
+    ReadLockInfo read_lock;
+    grab_read_lock(read_lock, version_id); // Throws
+
+    return version_id;
+}
+
+void SharedGroup::unpin_version(VersionID token)
+{
+    ReadLockInfo read_lock;
+    read_lock.m_reader_idx = token.index;
+
+    release_read_lock(read_lock);
+}
+
+#if REALM_METRICS
+std::shared_ptr<Metrics> SharedGroup::get_metrics()
+{
+    return m_metrics;
+}
+#endif // REALM_METRICS
+
+void SharedGroup::do_begin_read(VersionID version_id, bool writable)
+{
+    // FIXME: BadVersion must be thrown in every case where the specified
+    // version is not tethered in accordance with the documentation of
+    // begin_read().
+
+    grab_read_lock(m_read_lock, version_id); // Throws
+
+    ReadLockUnlockGuard g(*this, m_read_lock);
+
+    using gf = _impl::GroupFriend;
+    gf::attach_shared(m_group, m_read_lock.m_top_ref, m_read_lock.m_file_size, writable); // Throws
+
+    g.release();
+}
+
+
+void SharedGroup::do_end_read() noexcept
+{
+    REALM_ASSERT(m_read_lock.m_version != std::numeric_limits<version_type>::max());
+    release_read_lock(m_read_lock);
+    using gf = _impl::GroupFriend;
+    gf::detach(m_group);
+}
+
+
+
+bool SharedGroup::do_try_begin_write()
+{
+    // In the non-blocking case, we will only succeed if there is no contention for
+    // the write mutex. For this case we are trivially fair and can ignore the
+    // fairness machinery.
+    bool got_the_lock = m_writemutex.try_lock();
+    if (got_the_lock) {
+        finish_begin_write();
+    }
+    return got_the_lock;
 }
 
 
@@ -1354,187 +2028,168 @@ void SharedGroup::do_begin_write()
 {
     SharedInfo* info = m_file_map.get_addr();
 
-    // Get write lock
-    // Note that this will not get released until we call
-    // commit() or rollback()
-    info->writemutex.lock(&recover_from_dead_write_transact); // Throws
+    // Get write lock - the write lock is held until do_end_write().
+    //
+    // We use a ticketing scheme to ensure fairness wrt performing write transactions.
+    // (But cannot do that on Windows until we have interprocess condition variables there)
+    uint_fast32_t my_ticket = info->next_ticket.fetch_add(1, std::memory_order_relaxed);
+    m_writemutex.lock(); // Throws
 
-#ifndef _WIN32
-    if (info->flags == durability_Async) {
+    // allow for comparison even after wrap around of ticket numbering:
+    int32_t diff = int32_t(my_ticket - info->next_served);
+    bool should_yield = diff > 0; // ticket is in the future
+    // a) the above comparison is only guaranteed to be correct, if the distance
+    //    between my_ticket and info->next_served is less than 2^30. This will
+    //    be the case since the distance will be bounded by the number of threads
+    //    and each thread cannot ever hold more than one ticket.
+    // b) we could use 64 bit counters instead, but it is unclear if all platforms
+    //    have support for interprocess atomics for 64 bit values.
 
-        info->balancemutex.lock(&recover_from_dead_write_transact); // Throws
+    timespec time_limit;  // only compute the time limit if we're going to use it:
+    if (should_yield) {
+        // This clock is not monotonic, so time can move backwards. This can lead
+        // to a wrong time limit, but the only effect of a wrong time limit is that
+        // we momentarily lose fairness, so we accept it.
+        timeval tv;
+        gettimeofday(&tv, nullptr);
+        time_limit.tv_sec = tv.tv_sec;
+        time_limit.tv_nsec = tv.tv_usec * 1000;
+        time_limit.tv_nsec += 500000000;        // 500 msec wait
+        if (time_limit.tv_nsec >= 1000000000) { // overflow
+            time_limit.tv_nsec -= 1000000000;
+            time_limit.tv_sec += 1;
+        }
+    }
+
+    while (should_yield) {
+
+        m_pick_next_writer.wait(m_writemutex, &time_limit);
+        timeval tv;
+        gettimeofday(&tv, nullptr);
+        if (time_limit.tv_sec < tv.tv_sec
+            || (time_limit.tv_sec == tv.tv_sec && time_limit.tv_nsec < tv.tv_usec * 1000)) {
+            // Timeout!
+            break;
+        }
+        diff = int32_t(my_ticket - info->next_served);
+        should_yield = diff > 0; // ticket is in the future, so yield to someone else
+    }
+
+    // we may get here because a) it's our turn, b) we timed out
+    // we don't distinguish, satisfied that event b) should be rare.
+    // In case b), we have to *make* it our turn. Failure to do so could leave us
+    // with 'next_served' permanently trailing 'next_ticket'.
+    //
+    // In doing so, we may bypass other waiters, hence the condition for yielding
+    // should take this situation into account by comparing with '>' instead of '!='
+    info->next_served = my_ticket;
+    finish_begin_write();
+}
+
+void SharedGroup::finish_begin_write()
+{
+    SharedInfo* info = m_file_map.get_addr();
+    if (info->commit_in_critical_phase) {
+        m_writemutex.unlock();
+        throw std::runtime_error("Crash of other process detected, session restart required");
+    }
+
+#ifdef REALM_ASYNC_DAEMON
+    if (info->durability == static_cast<uint16_t>(Durability::Async)) {
+
+        m_balancemutex.lock(); // Throws
 
         // if we are running low on write slots, kick the sync daemon
         if (info->free_write_slots < relaxed_sync_threshold)
             m_work_to_do.notify();
         // if we are out of write slots, wait for the sync daemon to catch up
         while (info->free_write_slots <= 0) {
-            m_room_to_write.wait(info->balancemutex, recover_from_dead_write_transact);
+            m_room_to_write.wait(m_balancemutex, 0);
         }
 
         info->free_write_slots--;
-        info->balancemutex.unlock();
+        m_balancemutex.unlock();
     }
-#endif // _WIN32
+#endif // REALM_ASYNC_DAEMON
 }
 
 
-void SharedGroup::commit()
+void SharedGroup::do_end_write() noexcept
 {
-    do_commit();
-
-    end_read();
-    // complete detach
-    // (end_read allows group to retain data, but accessors become invalid after commit):
-    m_group.complete_detach();
-}
-
-
-#ifdef REALM_ENABLE_REPLICATION
-
-void SharedGroup::commit_and_continue_as_read()
-{
-    do_commit();
-
-    // Mark all managed space (beyond the attached file) as free.
-    m_group.m_alloc.reset_free_space_tracking(); // Throws
-
-    size_t old_baseline = m_group.m_alloc.get_baseline();
-
-    // Remap file if it has grown
-    if (m_readlock.m_file_size > old_baseline) {
-        bool addr_changed = m_group.m_alloc.remap(m_readlock.m_file_size); // Throws
-        // If the file was mapped to a new address, all array accessors must be
-        // updated.
-        if (addr_changed)
-            old_baseline = 0;
-    }
-    m_group.update_refs(m_readlock.m_top_ref, old_baseline);
-}
-
-void SharedGroup::rollback_and_continue_as_read()
-{
-    // Mark all managed space (beyond the attached file) as free.
-    m_group.m_alloc.reset_free_space_tracking(); // Throws
-
-    m_transact_stage = transact_Reading;
-
-    // get the commit log and use it to rollback all accessors:
-    if (Replication* repl = m_group.get_replication()) {
-
-        // this call is vectored through to do_rollback_and....
-        repl->rollback_write_transact(*this);
-    }
-
-    // release exclusive write access: (FIXME: do this earlier?)
     SharedInfo* info = m_file_map.get_addr();
-    info->writemutex.unlock();
-}
+    info->next_served++;
+    m_pick_next_writer.notify_all();
 
-void SharedGroup::do_rollback_and_continue_as_read(const char* begin, const char* end)
-{
-    BinaryData buffer(begin, end-begin);
-    m_group.reverse_transact(m_readlock.m_top_ref, buffer);
+    m_writemutex.unlock();
 }
 
 
-
-#endif // REALM_ENABLE_REPLICATION
-
-
-void SharedGroup::do_commit()
+Replication::version_type SharedGroup::do_commit()
 {
     REALM_ASSERT(m_transact_stage == transact_Writing);
 
-    // FIXME: This fails when replication is enabled and the first transaction
-    // in a lock-file session is rolled back (aborted), because then the first
-    // committed transaction will have m_readlock.m_version > 1.
-    if (m_readlock.m_version == 1)
-        m_group.reset_free_space_versions(); // Throws
-
-    SharedInfo* info = m_file_map.get_addr();
     SharedInfo* r_info = m_reader_map.get_addr();
 
-    // FIXME: ExceptionSafety: Corruption has happened if
-    // low_level_commit() throws, because we have already told the
-    // replication manager to commit. It is not yet clear how this
-    // conflict should be solved. The solution is probably to catch
-    // the exception from low_level_commit() and when caught, mark the
-    // local database as not-up-to-date. The exception should not be
-    // rethrown, because the commit was effectively successful.
-
-    {
-        uint_fast64_t new_version;
-#ifdef REALM_ENABLE_REPLICATION
-        // It is essential that if Replication::commit_write_transact() fails,
-        // then the transaction is not completed. In that case, a subsequent
-        // call to rollback() must still roll the transaction back.
-        if (Replication* repl = m_group.get_replication()) {
-            uint_fast64_t current_version = r_info->get_current_version_unchecked();
-            new_version = repl->commit_write_transact(*this, current_version); // Throws
+    version_type current_version = r_info->get_current_version_unchecked();
+    version_type new_version = current_version + 1;
+    if (Replication* repl = m_group.get_replication()) {
+        // If Replication::prepare_commit() fails, then the entire transaction
+        // fails. The application then has the option of terminating the
+        // transaction with a call to SharedGroup::rollback(), which in turn
+        // must call Replication::abort_transact().
+        new_version = repl->prepare_commit(current_version); // Throws
+        try {
+            low_level_commit(new_version); // Throws
         }
-        else {
-            new_version = r_info->get_current_version_unchecked() + 1;
+        catch (...) {
+            repl->abort_transact();
+            throw;
         }
-#else
-        new_version = r_info->get_current_version_unchecked() + 1;
-#endif
+        repl->finalize_commit();
+    }
+    else {
         low_level_commit(new_version); // Throws
     }
-
-    // advance readlock but dont update accessors:
-    // As this is done under lock, along with the addition above of the newest commit,
-    // we know for certain that the readlock we will grab WILL refer to our own newly
-    // completed commit.
-    release_readlock(m_readlock);
-    // FIXME: Why grab a new read-lock as part of a regular commit? It seems
-    // wrong.
-    //
-    // FIXME: We need to find a way to give SharedGroup::commit() a sound and
-    // intelligable exception behavior. The desirable exception behavior is
-    // probably that the commit has occured if, and only if it does not
-    // throw. The possible exception from grab_latest_readlock() makes this
-    // harder than it would otherwise have been.
-    bool ignored;
-    grab_latest_readlock(m_readlock, ignored); // Throws
-
-    // downgrade to a read transaction (if not, assert in end_read)
-    m_transact_stage = transact_Reading;
-    // Release write lock
-    info->writemutex.unlock();
+    return new_version;
 }
 
 
-void SharedGroup::rollback() REALM_NOEXCEPT
+SharedGroup::version_type SharedGroup::commit_and_continue_as_read()
 {
-    // FIXME: This method must work correctly even if it is called after a
-    // failed call to commit(). A failed call to commit() is any that returns to
-    // the caller by throwing an exception. As it is right now, rollback() does
-    // not handle all cases.
+    if (m_transact_stage != transact_Writing)
+        throw LogicError(LogicError::wrong_transact_state);
 
-    if (m_group.is_attached()) {
-        REALM_ASSERT(m_transact_stage == transact_Writing);
+    version_type version = do_commit(); // Throws
 
-#ifdef REALM_ENABLE_REPLICATION
-        if (Replication* repl = m_group.get_replication())
-            repl->rollback_write_transact(*this);
-#endif
-        m_transact_stage = transact_Reading;
-        end_read();
+    // advance read lock but dont update accessors:
+    // As this is done under lock, along with the addition above of the newest commit,
+    // we know for certain that the read lock we will grab WILL refer to our own newly
+    // completed commit.
+    release_read_lock(m_read_lock);
 
-        SharedInfo* info = m_file_map.get_addr();
+    VersionID version_id = VersionID();      // Latest available snapshot
+    grab_read_lock(m_read_lock, version_id); // Throws
 
-        // Release write lock
-        info->writemutex.unlock();
+    do_end_write();
 
-        // Clear all changes made during transaction
-        m_group.detach();
-    }
+    // Free memory that was allocated during the write transaction.
+    using gf = _impl::GroupFriend;
+    gf::reset_free_space_tracking(m_group); // Throws
+
+    // Remap file if it has grown, and update refs in underlying node structure
+    gf::remap_and_update_refs(m_group, m_read_lock.m_top_ref, m_read_lock.m_file_size); // Throws
+
+    set_transact_stage(transact_Reading);
+
+    return version;
 }
 
 
 bool SharedGroup::grow_reader_mapping(uint_fast32_t index)
 {
+    using _impl::SimulatedFailure;
+    SimulatedFailure::trigger(SimulatedFailure::shared_group__grow_reader_mapping); // Throws
+
     if (index >= m_local_max_entry) {
         // handle mapping expansion if required
         SharedInfo* r_info = m_reader_map.get_addr();
@@ -1548,13 +2203,14 @@ bool SharedGroup::grow_reader_mapping(uint_fast32_t index)
 }
 
 
-uint_fast64_t SharedGroup::get_current_version()
+SharedGroup::version_type SharedGroup::get_version_of_latest_snapshot()
 {
-    // As get_current_version may be called outside of the write mutex, another
-    // thread may be performing changes to the ringbuffer concurrently. It may
-    // even cleanup and recycle the current entry from under our feet, so we need
-    // to protect the entry by temporarily incrementing the reader ref count until
-    // we've got a safe reading of the version number.
+    // As get_version_of_latest_snapshot() may be called outside of the write
+    // mutex, another thread may be performing changes to the ringbuffer
+    // concurrently. It may even cleanup and recycle the current entry from
+    // under our feet, so we need to protect the entry by temporarily
+    // incrementing the reader ref count until we've got a safe reading of the
+    // version number.
     while (1) {
         uint_fast32_t index;
         SharedInfo* r_info;
@@ -1564,27 +2220,30 @@ uint_fast64_t SharedGroup::get_current_version()
             // the mapping to fit.
             r_info = m_reader_map.get_addr();
             index = r_info->readers.last();
-        }
-        while (grow_reader_mapping(index)); // throws
+        } while (grow_reader_mapping(index)); // throws
 
         // now (double) increment the read count so that no-one cleans up the entry
         // while we read it.
         const Ringbuffer::ReadCount& r = r_info->readers.get(index);
-        if (! atomic_double_inc_if_even(r.count)) {
+        if (!atomic_double_inc_if_even(r.count)) {
 
             continue;
         }
-        uint_fast64_t version = r.version;
+        version_type version = r.version;
         // release the entry again:
         atomic_double_dec(r.count);
         return version;
     }
 }
 
+
 void SharedGroup::low_level_commit(uint_fast64_t new_version)
 {
     SharedInfo* info = m_file_map.get_addr();
-    uint_fast64_t readlock_version;
+
+    // Version of oldest snapshot currently (or recently) bound in a transaction
+    // of the current session.
+    uint_fast64_t oldest_version;
     {
         SharedInfo* r_info = m_reader_map.get_addr();
 
@@ -1595,46 +2254,58 @@ void SharedGroup::low_level_commit(uint_fast64_t new_version)
             r_info = m_reader_map.get_addr();
         }
         r_info->readers.cleanup();
-        const Ringbuffer::ReadCount& r = r_info->readers.get_oldest();
-        readlock_version = r.version;
-#ifdef REALM_ENABLE_REPLICATION
-        // If replication is enabled, we need to propagate knowledge of the earliest 
-        // available version:
-        Replication* repl = _impl::GroupFriend::get_replication(m_group);
-        if (repl)
-            repl->set_last_version_seen_locally(readlock_version);
-#endif
+        const Ringbuffer::ReadCount& rc = r_info->readers.get_oldest();
+        oldest_version = rc.version;
 
+        // Allow for trimming of the history. Some types of histories do not
+        // need store changesets prior to the oldest bound snapshot.
+        if (_impl::History* hist = get_history())
+            hist->set_oldest_bound_version(oldest_version); // Throws
     }
 
     // Do the actual commit
     REALM_ASSERT(m_group.m_top.is_attached());
-    REALM_ASSERT(readlock_version <= new_version);
+    REALM_ASSERT(oldest_version <= new_version);
+
+#if REALM_METRICS
+    m_group.update_num_objects();
+#endif // REALM_METRICS
     // info->readers.dump();
     GroupWriter out(m_group); // Throws
-    out.set_versions(new_version, readlock_version);
+    out.set_versions(new_version, oldest_version);
     // Recursively write all changed arrays to end of file
     ref_type new_top_ref = out.write_group(); // Throws
+    m_free_space = out.get_free_space();
+    m_used_space = out.get_file_size() - m_free_space;
     // std::cout << "Writing version " << new_version << ", Topptr " << new_top_ref
-    //     << " Readlock at version " << readlock_version << std::endl;
-    // In durability_Full mode, we just use the file as backing for
-    // the shared memory. So we never actually flush the data to disk
-    // (the OS may do so opportinisticly, or when swapping). So in
-    // this mode the file on disk may very likely be in an invalid
-    // state.
-    if (info->flags == durability_Full)
-        out.commit(new_top_ref); // Throws
+    //     << " Read lock at version " << oldest_version << std::endl;
+    switch (Durability(info->durability)) {
+        case Durability::Full:
+            out.commit(new_top_ref); // Throws
+            break;
+        case Durability::MemOnly:
+        case Durability::Async:
+            // In Durability::MemOnly mode, we just use the file as backing for
+            // the shared memory. So we never actually flush the data to disk
+            // (the OS may do so opportinisticly, or when swapping). So in this
+            // mode the file on disk may very likely be in an invalid state.
+            break;
+    }
     size_t new_file_size = out.get_file_size();
-    // Update reader info
+    // Update reader info. If this fails in any way, the ringbuffer may be corrupted.
+    // This can lead to other readers seing invalid data which is likely to cause them
+    // to crash. Other writers *must* be prevented from writing any further updates
+    // to the database. The flag "commit_in_critical_phase" is used to prevent such updates.
+    info->commit_in_critical_phase = 1;
     {
         SharedInfo* r_info = m_reader_map.get_addr();
         if (r_info->readers.is_full()) {
             // buffer expansion
             uint_fast32_t entries = r_info->readers.get_num_entries();
             entries = entries + 32;
-            size_t new_info_size = sizeof(SharedInfo) + r_info->readers.compute_required_space( entries );
+            size_t new_info_size = sizeof(SharedInfo) + r_info->readers.compute_required_space(entries);
             // std::cout << "resizing: " << entries << " = " << new_info_size << std::endl;
-            m_file.prealloc(0, new_info_size); // Throws
+            m_file.prealloc(0, new_info_size);                                       // Throws
             m_reader_map.remap(m_file, util::File::access_ReadWrite, new_info_size); // Throws
             r_info = m_reader_map.get_addr();
             m_local_max_entry = entries;
@@ -1642,17 +2313,19 @@ void SharedGroup::low_level_commit(uint_fast64_t new_version)
         }
         Ringbuffer::ReadCount& r = r_info->readers.get_next();
         r.current_top = new_top_ref;
-        r.filesize    = new_file_size;
-        r.version     = new_version;
+        r.filesize = new_file_size;
+        r.version = new_version;
         r_info->readers.use_next();
     }
+    // At this point, the ringbuffer has been succesfully updated, and the next writer
+    // can safely proceed once the writemutex has been lifted.
+    info->commit_in_critical_phase = 0;
     {
-        RobustLockGuard lock(info->controlmutex, recover_from_dead_write_transact);
-        info->number_of_versions = new_version - readlock_version + 1;
+        std::lock_guard<InterprocessMutex> lock(m_controlmutex);
+        info->number_of_versions = new_version - oldest_version + 1;
         info->latest_version_number = new_version;
-#ifndef _WIN32
+
         m_new_commit_available.notify_all();
-#endif
     }
 }
 
@@ -1666,5 +2339,76 @@ void SharedGroup::reserve(size_t size)
     // util::File::prealloc_if_supported() (posix_fallocate() on
     // Linux) runs concurrently with modfications via a memory map of
     // the file. This assumption must be verified though.
-    m_group.m_alloc.reserve(size);
+    m_group.m_alloc.reserve_disk_space(size); // Throws
+}
+
+
+std::unique_ptr<SharedGroup::Handover<LinkView>>
+SharedGroup::export_linkview_for_handover(const LinkViewRef& accessor)
+{
+    if (m_transact_stage != transact_Reading) {
+        throw LogicError(LogicError::wrong_transact_state);
+    }
+    std::unique_ptr<Handover<LinkView>> result(new Handover<LinkView>());
+    LinkView::generate_patch(accessor, result->patch);
+    result->clone = 0; // not used for LinkView - maybe specialize Handover<LinkView> ?
+    result->version = get_version_of_current_transaction();
+    return result;
+}
+
+
+LinkViewRef SharedGroup::import_linkview_from_handover(std::unique_ptr<Handover<LinkView>> handover)
+{
+    if (handover->version != get_version_of_current_transaction()) {
+        throw BadVersion();
+    }
+    // move data
+    LinkViewRef result = LinkView::create_from_and_consume_patch(handover->patch, m_group);
+    return result;
+}
+
+
+std::unique_ptr<SharedGroup::Handover<Table>> SharedGroup::export_table_for_handover(const TableRef& accessor)
+{
+    if (m_transact_stage != transact_Reading) {
+        throw LogicError(LogicError::wrong_transact_state);
+    }
+    std::unique_ptr<Handover<Table>> result(new Handover<Table>());
+    Table::generate_patch(accessor.get(), result->patch);
+    result->clone = 0;
+    result->version = get_version_of_current_transaction();
+    return result;
+}
+
+
+TableRef SharedGroup::import_table_from_handover(std::unique_ptr<Handover<Table>> handover)
+{
+    if (handover->version != get_version_of_current_transaction()) {
+        throw BadVersion();
+    }
+    TableRef result = Table::create_from_and_consume_patch(handover->patch, m_group);
+    return result;
+}
+
+bool SharedGroup::call_with_lock(const std::string& realm_path, CallbackWithLock callback)
+{
+    auto lockfile_path(realm_path + ".lock");
+
+    File lockfile;
+    lockfile.open(lockfile_path, File::access_ReadWrite, File::create_Auto, 0); // Throws
+    File::CloseGuard fcg(lockfile);
+
+    if (lockfile.try_lock_exclusive()) { // Throws
+        callback(realm_path);
+        return true;
+    }
+    return false;
+}
+
+std::vector<std::pair<std::string, bool>> SharedGroup::get_core_files(const std::string& realm_path)
+{
+    std::vector<std::pair<std::string, bool>> files;
+    files.emplace_back(std::make_pair(realm_path, false));
+    files.emplace_back(std::make_pair(realm_path + ".management", true));
+    return files;
 }

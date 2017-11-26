@@ -1,3 +1,21 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "testsettings.hpp"
 #ifdef TEST_ARRAY_BLOB
 
@@ -87,9 +105,9 @@ TEST(ArrayBlob_General)
     CHECK_EQUAL(t3, blob.get(l3 + l2 + l1 + l2));
 
     // Test replace
-    blob.replace(l3, l3 + l2, t1, l1); // replace with smaller
+    blob.replace(l3, l3 + l2, t1, l1);                     // replace with smaller
     blob.replace(l3 + l1 + l1, l3 + l1 + l1 + l2, t3, l3); // replace with bigger
-    blob.replace(l3 + l1, l3 + l1 + l1, t4, l1); // replace with same
+    blob.replace(l3 + l1, l3 + l1 + l1, t4, l1);           // replace with same
 
     CHECK_EQUAL(t3, blob.get(0));
     CHECK_EQUAL(t1, blob.get(l3));
@@ -117,10 +135,11 @@ TEST(ArrayBlob_General)
 
 TEST(ArrayBlob_AdaptiveStringLeak)
 {
-    ref_type col_ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn col(Allocator::get_default(), col_ref);
+    ref_type col_ref = StringColumn::create(Allocator::get_default());
+    StringColumn col(Allocator::get_default(), col_ref);
+    std::string large_str(100, 'a'); // use constant larger than 'medium_string_max_size'
     for (size_t i = 0; i != 2 * REALM_MAX_BPNODE_SIZE; ++i)
-        col.insert(0, std::string(100, 'a'));  // use constant larger than 'medium_string_max_size'
+        col.insert(0, large_str);
 
     col.destroy();
 }
@@ -129,14 +148,14 @@ TEST(ArrayBlob_AdaptiveStringLeak)
 TEST(ArrayBlob_Null)
 {
     {
-        ref_type ref = AdaptiveStringColumn::create(Allocator::get_default());
-        AdaptiveStringColumn a(Allocator::get_default(), ref, true);
+        ref_type ref = StringColumn::create(Allocator::get_default());
+        StringColumn a(Allocator::get_default(), ref, true);
         a.add("70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  ");
         a.clear();
 
         a.add("foo");
         a.add("");
-        a.add(realm::null()); 
+        a.add(realm::null());
 
         CHECK_EQUAL(a.is_null(0), false);
         CHECK_EQUAL(a.is_null(1), false);
@@ -155,12 +174,12 @@ TEST(ArrayBlob_Null)
     }
 
     {
-        ref_type ref = AdaptiveStringColumn::create(Allocator::get_default());
-        AdaptiveStringColumn a(Allocator::get_default(), ref, true);
+        ref_type ref = StringColumn::create(Allocator::get_default());
+        StringColumn a(Allocator::get_default(), ref, true);
         a.add("70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  ");
         a.clear();
 
-        a.add(realm::null());  
+        a.add(realm::null());
         a.add("");
         a.add("foo");
 
@@ -170,9 +189,9 @@ TEST(ArrayBlob_Null)
         CHECK(a.get(2) == "foo");
 
         // Test insert
-        a.insert(0, realm::null()); 
-        a.insert(2, realm::null()); 
-        a.insert(4, realm::null()); 
+        a.insert(0, realm::null());
+        a.insert(2, realm::null());
+        a.insert(4, realm::null());
 
         CHECK_EQUAL(a.is_null(0), true);
         CHECK_EQUAL(a.is_null(1), true);
@@ -185,8 +204,8 @@ TEST(ArrayBlob_Null)
     }
 
     {
-        ref_type ref = AdaptiveStringColumn::create(Allocator::get_default());
-        AdaptiveStringColumn a(Allocator::get_default(), ref, true);
+        ref_type ref = StringColumn::create(Allocator::get_default());
+        StringColumn a(Allocator::get_default(), ref, true);
         a.add("70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  ");
         a.clear();
 
@@ -213,8 +232,8 @@ TEST(ArrayBlob_Null)
     Random random(random_int<unsigned long>());
 
     for (size_t t = 0; t < 2; t++) {
-        ref_type ref = AdaptiveStringColumn::create(Allocator::get_default());
-        AdaptiveStringColumn a(Allocator::get_default(), ref, true);
+        ref_type ref = StringColumn::create(Allocator::get_default());
+        StringColumn a(Allocator::get_default(), ref, true);
         a.add("70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  ");
         a.clear();
 
@@ -222,7 +241,8 @@ TEST(ArrayBlob_Null)
         std::vector<std::string> v;
 
         for (size_t i = 0; i < 2000; i++) {
-            unsigned char rnd = static_cast<unsigned char>(random.draw_int<unsigned int>());  //    = 1234 * ((i + 123) * (t + 432) + 423) + 543;
+            unsigned char rnd = static_cast<unsigned char>(
+                random.draw_int<unsigned int>()); //    = 1234 * ((i + 123) * (t + 432) + 423) + 543;
 
             // Add more often than removing, so that we grow
             if (rnd < 80 && a.size() > 0) {
@@ -263,13 +283,13 @@ TEST(ArrayBlob_Null)
                 }
 
                 CHECK_EQUAL(a.size(), v.size());
-                for (size_t i = 0; i < a.size(); i++) {
-                    if (v[i] == "null") {
-                        CHECK(a.is_null(i));
-                        CHECK(a.get(i).data() == 0);
+                for (size_t a_i = 0; a_i < a.size(); a_i++) {
+                    if (v[a_i] == "null") {
+                        CHECK(a.is_null(a_i));
+                        CHECK(a.get(a_i).data() == nullptr);
                     }
                     else {
-                        CHECK(a.get(i) == v[i]);
+                        CHECK(a.get(a_i) == v[a_i]);
                     }
                 }
             }
@@ -277,7 +297,6 @@ TEST(ArrayBlob_Null)
         a.destroy();
     }
 }
-
 
 
 #endif // TEST_ARRAY_BLOB

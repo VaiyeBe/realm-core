@@ -1,20 +1,18 @@
 /*************************************************************************
  *
- * REALM CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] Realm Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of Realm Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to Realm Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from Realm Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
 
@@ -22,138 +20,66 @@
 #define REALM_UTIL_ENCRYPTED_FILE_MAPPING_HPP
 
 #include <realm/util/file.hpp>
+#include <realm/util/thread.hpp>
+#include <realm/util/features.h>
 
-#ifdef REALM_ENABLE_ENCRYPTION
+#if REALM_ENABLE_ENCRYPTION
+
+typedef size_t (*Header_to_size)(const char* addr);
 
 #include <vector>
-
-#ifdef __APPLE__
-#include <CommonCrypto/CommonCrypto.h>
-#elif defined(REALM_ANDROID)
-// OpenSSL headers aren't part of the NDK, so declare the bits we need manually
-#define AES_ENCRYPT	1
-#define AES_DECRYPT	0
-#define SHA224_DIGEST_LENGTH 28
-
-typedef struct aes_key_st {
-    unsigned long data[61];
-} AES_KEY;
-
-typedef struct SHA256state_st {
-    unsigned int data[28];
-} SHA256_CTX;
-#elif !defined(_WIN32)
-#include <openssl/aes.h>
-#include <openssl/sha.h>
-#else
-#error Encryption is not yet implemented for this platform.
-#endif
 
 namespace realm {
 namespace util {
 
-size_t page_size();
-
-struct iv_table;
-
-class AESCryptor {
-public:
-    AESCryptor(const uint8_t* key);
-    ~AESCryptor() REALM_NOEXCEPT;
-
-    void set_file_size(off_t new_size);
-
-    bool try_read(int fd, off_t pos, char* dst, size_t size);
-    bool read(int fd, off_t pos, char* dst, size_t size) REALM_NOEXCEPT;
-    void write(int fd, off_t pos, const char* src, size_t size) REALM_NOEXCEPT;
-
-private:
-    enum EncryptionMode {
-#ifdef __APPLE__
-        mode_Encrypt = kCCEncrypt,
-        mode_Decrypt = kCCDecrypt
-#else
-        mode_Encrypt = AES_ENCRYPT,
-        mode_Decrypt = AES_DECRYPT
-#endif
-    };
-
-#ifdef __APPLE__
-    CCCryptorRef m_encr;
-    CCCryptorRef m_decr;
-#else
-    AES_KEY m_ectx;
-    AES_KEY m_dctx;
-#endif
-
-#if defined(__linux__)
-    // Loaded at runtime with dysym
-    int (*AES_set_encrypt_key)(const unsigned char *, const int, AES_KEY *);
-    int (*AES_set_decrypt_key)(const unsigned char *, const int, AES_KEY *);
-    void (*AES_cbc_encrypt)(const unsigned char *, unsigned char *,
-                            const unsigned long, const AES_KEY *,
-                            unsigned char *, const int);
-
-    int (*SHA224_Init)(SHA256_CTX *);
-    int (*SHA256_Update)(SHA256_CTX *, const void *, size_t);
-    int (*SHA256_Final)(unsigned char *, SHA256_CTX *);
-#endif
-
-    uint8_t m_hmacKey[32];
-    std::vector<iv_table> m_iv_buffer;
-
-    void calc_hmac(const void* src, size_t len, uint8_t* dst, const uint8_t* key) const;
-    bool check_hmac(const void *data, size_t len, const uint8_t *hmac) const;
-    void crypt(EncryptionMode mode, off_t pos, char* dst, const char* src,
-               const char* stored_iv) REALM_NOEXCEPT;
-    iv_table& get_iv_table(int fd, off_t data_pos) REALM_NOEXCEPT;
-};
-
+struct SharedFileInfo;
 class EncryptedFileMapping;
-
-struct SharedFileInfo {
-    int fd;
-    AESCryptor cryptor;
-    std::vector<EncryptedFileMapping*> mappings;
-
-    SharedFileInfo(const uint8_t* key, int fd);
-};
 
 class EncryptedFileMapping {
 public:
     // Adds the newly-created object to file.mappings iff it's successfully constructed
-    EncryptedFileMapping(SharedFileInfo& file, void* addr, size_t size, File::AccessMode access);
+    EncryptedFileMapping(SharedFileInfo& file, size_t file_offset, void* addr, size_t size, File::AccessMode access);
     ~EncryptedFileMapping();
+
+    // Default implementations of copy/assign can trigger multiple destructions
+    EncryptedFileMapping(const EncryptedFileMapping&) = delete;
+    EncryptedFileMapping& operator=(const EncryptedFileMapping&) = delete;
 
     // Write all dirty pages to disk and mark them read-only
     // Does not call fsync
-    void flush() REALM_NOEXCEPT;
+    void flush() noexcept;
 
     // Sync this file to disk
-    void sync() REALM_NOEXCEPT;
+    void sync() noexcept;
 
-    // Handle a SEGV or BUS at the given address, which must be within this
-    // object's mapping
-    void handle_access(void* addr) REALM_NOEXCEPT;
+    // Make sure that memory in the specified range is synchronized with any
+    // changes made globally visible through call to write_barrier
+    void read_barrier(const void* addr, size_t size, UniqueLock& lock, Header_to_size header_to_size);
+
+    // Ensures that any changes made to memory in the specified range
+    // becomes visible to any later calls to read_barrier()
+    void write_barrier(const void* addr, size_t size) noexcept;
 
     // Set this mapping to a new address and size
     // Flushes any remaining dirty pages from the old mapping
-    void set(void* new_addr, size_t new_size);
+    void set(void* new_addr, size_t new_size, size_t new_file_offset);
+
+    bool contains_page(size_t page_in_file) const;
+    size_t get_local_index_of_address(const void* addr, size_t offset = 0) const;
 
 private:
     SharedFileInfo& m_file;
 
-    size_t m_page_size;
+    size_t m_page_shift;
     size_t m_blocks_per_page;
 
-    void* m_addr;
-    size_t m_size;
+    void* m_addr = nullptr;
 
-    uintptr_t m_first_page;
-    size_t m_page_count;
+    size_t m_first_page;
 
-    std::vector<bool> m_read_pages;
-    std::vector<bool> m_write_pages;
+    // MUST be of type char because of coherence issues when writing inside mutex and reading outside 
+    // it. FIXME: We're investigating if this is good enough, or if we need further mechanisms
+    std::vector<char> m_up_to_date_pages;
     std::vector<bool> m_dirty_pages;
 
     File::AccessMode m_access;
@@ -162,20 +88,72 @@ private:
     std::unique_ptr<char[]> m_validate_buffer;
 #endif
 
-    char* page_addr(size_t i) const REALM_NOEXCEPT;
+    char* page_addr(size_t local_page_ndx) const noexcept;
 
-    void mark_unreadable(size_t i) REALM_NOEXCEPT;
-    void mark_readable(size_t i) REALM_NOEXCEPT;
-    void mark_unwritable(size_t i) REALM_NOEXCEPT;
+    void mark_outdated(size_t local_page_ndx) noexcept;
+    bool copy_up_to_date_page(size_t local_page_ndx) noexcept;
+    void refresh_page(size_t local_page_ndx);
+    void write_page(size_t local_page_ndx) noexcept;
 
-    bool copy_read_page(size_t i) REALM_NOEXCEPT;
-    void read_page(size_t i) REALM_NOEXCEPT;
-    void write_page(size_t i) REALM_NOEXCEPT;
-
-    void validate_page(size_t i) REALM_NOEXCEPT;
-    void validate() REALM_NOEXCEPT;
+    void validate_page(size_t local_page_ndx) noexcept;
+    void validate() noexcept;
 };
 
+inline size_t EncryptedFileMapping::get_local_index_of_address(const void* addr, size_t offset) const
+{
+    REALM_ASSERT_EX(addr >= m_addr, addr, m_addr);
+
+    size_t local_ndx = ((reinterpret_cast<uintptr_t>(addr) - reinterpret_cast<uintptr_t>(m_addr) + offset) >> m_page_shift);
+    REALM_ASSERT_EX(local_ndx < m_up_to_date_pages.size(), local_ndx, m_up_to_date_pages.size());
+    return local_ndx;
+}
+
+inline bool EncryptedFileMapping::contains_page(size_t page_in_file) const
+{
+    // first check for (page_in_file >= m_first_page) so that the following
+    // subtraction using unsigned types never wraps under 0
+    return page_in_file >= m_first_page && page_in_file - m_first_page < m_up_to_date_pages.size();
+}
+
+inline void EncryptedFileMapping::read_barrier(const void* addr, size_t size, UniqueLock& lock,
+                                               Header_to_size header_to_size)
+{
+    size_t first_accessed_local_page = get_local_index_of_address(addr);
+
+    // make sure the first page is available
+    // Checking before taking the lock is important to performance.
+    if (!m_up_to_date_pages[first_accessed_local_page]) {
+        if (!lock.holds_lock())
+            lock.lock();
+        // after taking the lock, we must repeat the check so that we never
+        // call refresh_page() on a page which is already up to date.
+        if (!m_up_to_date_pages[first_accessed_local_page])
+            refresh_page(first_accessed_local_page);
+    }
+
+    if (header_to_size) {
+
+        // We know it's an array, and array headers are 8-byte aligned, so it is
+        // included in the first page which was handled above.
+        size = header_to_size(static_cast<const char*>(addr));
+    }
+
+    size_t last_idx = get_local_index_of_address(addr, size == 0 ? 0 : size - 1);
+    size_t up_to_date_pages_size = m_up_to_date_pages.size();
+
+    // We already checked first_accessed_local_page above, so we start the loop
+    // at first_accessed_local_page + 1 to check the following page.
+    for (size_t idx = first_accessed_local_page + 1; idx <= last_idx && idx < up_to_date_pages_size; ++idx) {
+        if (!m_up_to_date_pages[idx]) {
+            if (!lock.holds_lock())
+                lock.lock();
+            // after taking the lock, we must repeat the check so that we never
+            // call refresh_page() on a page which is already up to date.
+            if (!m_up_to_date_pages[idx])
+                refresh_page(idx);
+        }
+    }
+}
 }
 }
 
@@ -186,10 +164,12 @@ namespace util {
 
 /// Thrown by EncryptedFileMapping if a file opened is non-empty and does not
 /// contain valid encrypted data
-struct DecryptionFailed: util::File::AccessError {
-    DecryptionFailed(): util::File::AccessError("Decryption failed") {}
+struct DecryptionFailed : util::File::AccessError {
+    DecryptionFailed()
+        : util::File::AccessError("Decryption failed", std::string())
+    {
+    }
 };
-
 }
 }
 

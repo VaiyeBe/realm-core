@@ -1,3 +1,21 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "testsettings.hpp"
 #ifdef TEST_BINARY_DATA
 
@@ -152,60 +170,60 @@ TEST(BinaryData_LexicographicCompare)
     BinaryData bd_9_11(s_9_11.data(), s_9_11.size());
     BinaryData bd_9_22(s_9_22.data(), s_9_22.size());
 
-    CHECK((bd_0    >= bd_0)    && !(bd_0    <  bd_0));
-    CHECK((bd_0    <= bd_0)    && !(bd_0    >  bd_0));
-    CHECK((bd_0    <  bd_8_11) && !(bd_0    >= bd_8_11));
-    CHECK((bd_0    <= bd_8_11) && !(bd_0    >  bd_8_11));
-    CHECK((bd_0    <  bd_8_22) && !(bd_0    >= bd_8_22));
-    CHECK((bd_0    <= bd_8_22) && !(bd_0    >  bd_8_22));
-    CHECK((bd_0    <  bd_9_11) && !(bd_0    >= bd_9_11));
-    CHECK((bd_0    <= bd_9_11) && !(bd_0    >  bd_9_11));
-    CHECK((bd_0    <  bd_9_22) && !(bd_0    >= bd_9_22));
-    CHECK((bd_0    <= bd_9_22) && !(bd_0    >  bd_9_22));
+    CHECK((bd_0 >= bd_0) && !(bd_0 < bd_0));
+    CHECK((bd_0 <= bd_0) && !(bd_0 > bd_0));
+    CHECK((bd_0 < bd_8_11) && !(bd_0 >= bd_8_11));
+    CHECK((bd_0 <= bd_8_11) && !(bd_0 > bd_8_11));
+    CHECK((bd_0 < bd_8_22) && !(bd_0 >= bd_8_22));
+    CHECK((bd_0 <= bd_8_22) && !(bd_0 > bd_8_22));
+    CHECK((bd_0 < bd_9_11) && !(bd_0 >= bd_9_11));
+    CHECK((bd_0 <= bd_9_11) && !(bd_0 > bd_9_11));
+    CHECK((bd_0 < bd_9_22) && !(bd_0 >= bd_9_22));
+    CHECK((bd_0 <= bd_9_22) && !(bd_0 > bd_9_22));
 
-    CHECK((bd_8_11 >= bd_0)    && !(bd_8_11 <  bd_0));
-    CHECK((bd_8_11 >  bd_0)    && !(bd_8_11 <= bd_0));
-    CHECK((bd_8_11 >= bd_8_11) && !(bd_8_11 <  bd_8_11));
-    CHECK((bd_8_11 <= bd_8_11) && !(bd_8_11 >  bd_8_11));
-    CHECK((bd_8_11 <  bd_8_22) && !(bd_8_11 >= bd_8_22));
-    CHECK((bd_8_11 <= bd_8_22) && !(bd_8_11 >  bd_8_22));
-    CHECK((bd_8_11 <  bd_9_11) && !(bd_8_11 >= bd_9_11));
-    CHECK((bd_8_11 <= bd_9_11) && !(bd_8_11 >  bd_9_11));
-    CHECK((bd_8_11 <  bd_9_22) && !(bd_8_11 >= bd_9_22));
-    CHECK((bd_8_11 <= bd_9_22) && !(bd_8_11 >  bd_9_22));
+    CHECK((bd_8_11 >= bd_0) && !(bd_8_11 < bd_0));
+    CHECK((bd_8_11 > bd_0) && !(bd_8_11 <= bd_0));
+    CHECK((bd_8_11 >= bd_8_11) && !(bd_8_11 < bd_8_11));
+    CHECK((bd_8_11 <= bd_8_11) && !(bd_8_11 > bd_8_11));
+    CHECK((bd_8_11 < bd_8_22) && !(bd_8_11 >= bd_8_22));
+    CHECK((bd_8_11 <= bd_8_22) && !(bd_8_11 > bd_8_22));
+    CHECK((bd_8_11 < bd_9_11) && !(bd_8_11 >= bd_9_11));
+    CHECK((bd_8_11 <= bd_9_11) && !(bd_8_11 > bd_9_11));
+    CHECK((bd_8_11 < bd_9_22) && !(bd_8_11 >= bd_9_22));
+    CHECK((bd_8_11 <= bd_9_22) && !(bd_8_11 > bd_9_22));
 
-    CHECK((bd_8_22 >= bd_0)    && !(bd_8_22 <  bd_0));
-    CHECK((bd_8_22 >  bd_0)    && !(bd_8_22 <= bd_0));
-    CHECK((bd_8_22 >= bd_8_11) && !(bd_8_22 <  bd_8_11));
-    CHECK((bd_8_22 >  bd_8_11) && !(bd_8_22 <= bd_8_11));
-    CHECK((bd_8_22 >= bd_8_22) && !(bd_8_22 <  bd_8_22));
-    CHECK((bd_8_22 <= bd_8_22) && !(bd_8_22 >  bd_8_22));
-    CHECK((bd_8_22 >= bd_9_11) && !(bd_8_22 <  bd_9_11));
-    CHECK((bd_8_22 >  bd_9_11) && !(bd_8_22 <= bd_9_11));
-    CHECK((bd_8_22 <  bd_9_22) && !(bd_8_22 >= bd_9_22));
-    CHECK((bd_8_22 <= bd_9_22) && !(bd_8_22 >  bd_9_22));
+    CHECK((bd_8_22 >= bd_0) && !(bd_8_22 < bd_0));
+    CHECK((bd_8_22 > bd_0) && !(bd_8_22 <= bd_0));
+    CHECK((bd_8_22 >= bd_8_11) && !(bd_8_22 < bd_8_11));
+    CHECK((bd_8_22 > bd_8_11) && !(bd_8_22 <= bd_8_11));
+    CHECK((bd_8_22 >= bd_8_22) && !(bd_8_22 < bd_8_22));
+    CHECK((bd_8_22 <= bd_8_22) && !(bd_8_22 > bd_8_22));
+    CHECK((bd_8_22 >= bd_9_11) && !(bd_8_22 < bd_9_11));
+    CHECK((bd_8_22 > bd_9_11) && !(bd_8_22 <= bd_9_11));
+    CHECK((bd_8_22 < bd_9_22) && !(bd_8_22 >= bd_9_22));
+    CHECK((bd_8_22 <= bd_9_22) && !(bd_8_22 > bd_9_22));
 
-    CHECK((bd_9_11 >= bd_0)    && !(bd_9_11 <  bd_0));
-    CHECK((bd_9_11 >  bd_0)    && !(bd_9_11 <= bd_0));
-    CHECK((bd_9_11 >= bd_8_11) && !(bd_9_11 <  bd_8_11));
-    CHECK((bd_9_11 >  bd_8_11) && !(bd_9_11 <= bd_8_11));
-    CHECK((bd_9_11 <  bd_8_22) && !(bd_9_11 >= bd_8_22));
-    CHECK((bd_9_11 <= bd_8_22) && !(bd_9_11 >  bd_8_22));
-    CHECK((bd_9_11 >= bd_9_11) && !(bd_9_11 <  bd_9_11));
-    CHECK((bd_9_11 <= bd_9_11) && !(bd_9_11 >  bd_9_11));
-    CHECK((bd_9_11 <  bd_9_22) && !(bd_9_11 >= bd_9_22));
-    CHECK((bd_9_11 <= bd_9_22) && !(bd_9_11 >  bd_9_22));
+    CHECK((bd_9_11 >= bd_0) && !(bd_9_11 < bd_0));
+    CHECK((bd_9_11 > bd_0) && !(bd_9_11 <= bd_0));
+    CHECK((bd_9_11 >= bd_8_11) && !(bd_9_11 < bd_8_11));
+    CHECK((bd_9_11 > bd_8_11) && !(bd_9_11 <= bd_8_11));
+    CHECK((bd_9_11 < bd_8_22) && !(bd_9_11 >= bd_8_22));
+    CHECK((bd_9_11 <= bd_8_22) && !(bd_9_11 > bd_8_22));
+    CHECK((bd_9_11 >= bd_9_11) && !(bd_9_11 < bd_9_11));
+    CHECK((bd_9_11 <= bd_9_11) && !(bd_9_11 > bd_9_11));
+    CHECK((bd_9_11 < bd_9_22) && !(bd_9_11 >= bd_9_22));
+    CHECK((bd_9_11 <= bd_9_22) && !(bd_9_11 > bd_9_22));
 
-    CHECK((bd_9_22 >= bd_0)    && !(bd_9_22 <  bd_0));
-    CHECK((bd_9_22 >  bd_0)    && !(bd_9_22 <= bd_0));
-    CHECK((bd_9_22 >= bd_8_11) && !(bd_9_22 <  bd_8_11));
-    CHECK((bd_9_22 >  bd_8_11) && !(bd_9_22 <= bd_8_11));
-    CHECK((bd_9_22 >= bd_8_22) && !(bd_9_22 <  bd_8_22));
-    CHECK((bd_9_22 >  bd_8_22) && !(bd_9_22 <= bd_8_22));
-    CHECK((bd_9_22 >= bd_9_11) && !(bd_9_22 <  bd_9_11));
-    CHECK((bd_9_22 >  bd_9_11) && !(bd_9_22 <= bd_9_11));
-    CHECK((bd_9_22 >= bd_9_22) && !(bd_9_22 <  bd_9_22));
-    CHECK((bd_9_22 <= bd_9_22) && !(bd_9_22 >  bd_9_22));
+    CHECK((bd_9_22 >= bd_0) && !(bd_9_22 < bd_0));
+    CHECK((bd_9_22 > bd_0) && !(bd_9_22 <= bd_0));
+    CHECK((bd_9_22 >= bd_8_11) && !(bd_9_22 < bd_8_11));
+    CHECK((bd_9_22 > bd_8_11) && !(bd_9_22 <= bd_8_11));
+    CHECK((bd_9_22 >= bd_8_22) && !(bd_9_22 < bd_8_22));
+    CHECK((bd_9_22 > bd_8_22) && !(bd_9_22 <= bd_8_22));
+    CHECK((bd_9_22 >= bd_9_11) && !(bd_9_22 < bd_9_11));
+    CHECK((bd_9_22 > bd_9_11) && !(bd_9_22 <= bd_9_11));
+    CHECK((bd_9_22 >= bd_9_22) && !(bd_9_22 < bd_9_22));
+    CHECK((bd_9_22 <= bd_9_22) && !(bd_9_22 > bd_9_22));
 }
 
 

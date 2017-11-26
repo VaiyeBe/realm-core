@@ -1,3 +1,21 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include <algorithm>
 
 #include "verified_integer.hpp"
@@ -44,7 +62,7 @@ int64_t VerifiedInteger::get(size_t ndx)
 
 int64_t VerifiedInteger::sum(size_t start, size_t end)
 {
-    int64_t sum = 0;
+    int64_t running_sum = 0;
 
     if (start == end)
         return 0;
@@ -53,10 +71,10 @@ int64_t VerifiedInteger::sum(size_t start, size_t end)
         end = v.size();
 
     for (size_t t = start; t < end; ++t)
-        sum += v[t];
+        running_sum += v[t];
 
-    REALM_ASSERT(sum == u.sum(start, end));
-    return sum;
+    REALM_ASSERT(running_sum == u.sum(start, end));
+    return running_sum;
 }
 
 int64_t VerifiedInteger::maximum(size_t start, size_t end)
@@ -106,7 +124,7 @@ void VerifiedInteger::set(size_t ndx, int64_t value)
 void VerifiedInteger::erase(size_t ndx)
 {
     v.erase(v.begin() + ndx);
-    u.erase(ndx, ndx + 1 == u.size());
+    u.erase(ndx);
     REALM_ASSERT(v.size() == u.size());
     verify_neighbours(ndx);
     REALM_ASSERT(occasional_verify());
@@ -137,10 +155,12 @@ size_t VerifiedInteger::size()
 }
 
 // todo/fixme, end ignored
-void VerifiedInteger::find_all(Column &c, int64_t value, size_t start, size_t end)
+void VerifiedInteger::find_all(IntegerColumn& c, int64_t value, size_t start, size_t end)
 {
     std::vector<int64_t>::iterator ita = v.begin() + start;
-    std::vector<int64_t>::iterator itb = end == size_t(-1) ? v.end() : v.begin() + (end == size_t(-1) ? v.size() : end);;
+    std::vector<int64_t>::iterator itb =
+        end == size_t(-1) ? v.end() : v.begin() + (end == size_t(-1) ? v.size() : end);
+    ;
     std::vector<size_t> result;
     while (ita != itb) {
         ita = std::find(ita, itb, value);
@@ -164,7 +184,7 @@ void VerifiedInteger::find_all(Column &c, int64_t value, size_t start, size_t en
     return;
 }
 
-bool VerifiedInteger::Verify()
+bool VerifiedInteger::verify()
 {
     REALM_ASSERT(u.size() == v.size());
     if (u.size() != v.size())
@@ -182,7 +202,7 @@ bool VerifiedInteger::Verify()
 bool VerifiedInteger::occasional_verify()
 {
     if (m_random.draw_int_max(v.size() / 10) == 0)
-        return Verify();
+        return verify();
     return true;
 }
 

@@ -1,3 +1,21 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "testsettings.hpp"
 
 #include <limits>
@@ -6,7 +24,7 @@
 #include <iostream>
 #include <typeinfo>
 
-#include <stdint.h>
+#include <cstdint>
 
 #include <realm/util/type_list.hpp>
 #include <realm/util/safe_int_ops.hpp>
@@ -18,7 +36,7 @@
 
 using namespace realm::util;
 using namespace realm::test_util;
-using unit_test::TestResults;
+using unit_test::TestContext;
 
 
 // Test independence and thread-safety
@@ -51,7 +69,6 @@ using unit_test::TestResults;
 // check-testcase` (or one of its friends) from the command line.
 
 
-
 // FIXME: Test T -> realm::test_util::super_int -> T using min/max
 // values for each fundamental standard type, and also using 0 and -1
 // for signed types.
@@ -64,27 +81,464 @@ using unit_test::TestResults;
 // only if make_unsigned<S>::type(s < 0 ?  -1-s : s) <
 // (U(1)<<(lim_u::digits-1)).
 
-// FIXME: Test realm::util::int_shift_left_with_overflow_detect().
-
-// FIXME: Test realm::util::int_cast_with_overflow_detect().
-
 
 TEST(SafeIntOps_AddWithOverflowDetect)
 {
-    int lval = 255;
-    CHECK(!int_add_with_overflow_detect(lval, char(10)));
+    {   // signed and signed
+        int lval = 255;
+        char rval = 10;
+        CHECK(!int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, 255 + 10);
+
+        rval = 1;
+        lval = std::numeric_limits<int>::max();
+        CHECK(int_add_with_overflow_detect(lval, rval));    // does overflow
+        CHECK_EQUAL(lval, std::numeric_limits<int>::max()); // unchanged
+
+        rval = 1;
+        lval = std::numeric_limits<int>::max() - 1;
+        CHECK(!int_add_with_overflow_detect(lval, rval));   // does not overflow
+        CHECK_EQUAL(lval, std::numeric_limits<int>::max()); // changed
+
+        rval = 0;
+        lval = std::numeric_limits<int>::max();
+        CHECK(!int_add_with_overflow_detect(lval, rval));   // does not overflow
+        CHECK_EQUAL(lval, std::numeric_limits<int>::max()); // unchanged
+
+        rval = -1;
+        lval = std::numeric_limits<int>::min();
+        CHECK(int_add_with_overflow_detect(lval, rval));    // does overflow
+        CHECK_EQUAL(lval, std::numeric_limits<int>::min()); // unchanged
+    }
+    {   // signed and unsigned
+        char lval = std::numeric_limits<char>::max();
+        size_t rval = 0;
+        CHECK(!int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<char>::max());
+
+        lval = std::numeric_limits<char>::max();
+        rval = 1;
+        CHECK(int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<char>::max());
+
+        lval = 0;
+        rval = std::numeric_limits<char>::max();
+        CHECK(!int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<char>::max());
+
+        lval = -1;
+        rval = std::numeric_limits<char>::max() + 1;
+        CHECK(!int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<char>::max());
+
+        lval = -1;
+        rval = std::numeric_limits<char>::max() + 2;
+        CHECK(int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, -1);
+    }
+    {   // unsigned and signed
+        size_t lval = std::numeric_limits<size_t>::max();
+        char rval = 0;
+        CHECK(!int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::max());
+
+        lval = std::numeric_limits<size_t>::max();
+        rval = 1;
+        CHECK(int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::max());
+
+        lval = std::numeric_limits<size_t>::max();
+        rval = -1;
+        CHECK(!int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::max() - 1);
+
+        lval = std::numeric_limits<size_t>::min();
+        rval = 0;
+        CHECK(!int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::min());
+
+        lval = std::numeric_limits<size_t>::min();
+        rval = -1;
+        CHECK(int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::min());
+
+        // lval::bits < rval::bits
+        unsigned char lval2 = std::numeric_limits<unsigned char>::max();
+        int64_t rval2 = 1;
+        CHECK(int_add_with_overflow_detect(lval2, rval2));
+        CHECK_EQUAL(lval2, std::numeric_limits<unsigned char>::max());
+
+        lval2 = std::numeric_limits<unsigned char>::max() - 1;
+        rval2 = 1;
+        CHECK(!int_add_with_overflow_detect(lval2, rval2));
+        CHECK_EQUAL(lval2, std::numeric_limits<unsigned char>::max());
+
+        lval2 = 0;
+        rval2 = std::numeric_limits<unsigned char>::max() + 1;
+        CHECK(int_add_with_overflow_detect(lval2, rval2));
+        CHECK_EQUAL(lval2, 0);
+    }
+    {   // unsigned and unsigned
+        size_t lval = std::numeric_limits<size_t>::max();
+        size_t rval = 0;
+        CHECK(!int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::max());
+
+        lval = std::numeric_limits<size_t>::max();
+        rval = 1;
+        CHECK(int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::max());
+
+        lval = 0;
+        rval = std::numeric_limits<size_t>::max();
+        CHECK(!int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::max());
+
+        lval = 1;
+        rval = std::numeric_limits<size_t>::max();
+        CHECK(int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, 1);
+
+        lval = std::numeric_limits<size_t>::max();
+        rval = std::numeric_limits<size_t>::max();
+        CHECK(int_add_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::max());
+    }
+}
+
+
+TEST(SafeIntOps_SubtractWithOverflowDetect)
+{
+    {   // signed and signed
+        int lval = std::numeric_limits<int>::max() - 1;
+        char rval = -10;
+        CHECK(int_subtract_with_overflow_detect(lval, rval));   // does overflow
+        CHECK_EQUAL(lval, std::numeric_limits<int>::max() - 1); // unchanged
+
+        rval = -1;
+        lval = std::numeric_limits<int>::max();
+        CHECK(int_subtract_with_overflow_detect(lval, rval));   // does overflow
+        CHECK_EQUAL(lval, std::numeric_limits<int>::max());     // unchanged
+
+        rval = 0;
+        lval = std::numeric_limits<int>::max();
+        CHECK(!int_subtract_with_overflow_detect(lval, rval));  // does not overflow
+        CHECK_EQUAL(lval, std::numeric_limits<int>::max());     // unchanged
+
+        rval = 0;
+        lval = std::numeric_limits<int>::min();
+        CHECK(!int_subtract_with_overflow_detect(lval, rval));  // does not overflow
+        CHECK_EQUAL(lval, std::numeric_limits<int>::min());     // unchanged
+
+        rval = 1;
+        lval = std::numeric_limits<int>::min();
+        CHECK(int_subtract_with_overflow_detect(lval, rval));   // does overflow
+        CHECK_EQUAL(lval, std::numeric_limits<int>::min());     // unchanged
+    }
+    {   // signed and unsigned
+        char lval = std::numeric_limits<char>::min();
+        size_t rval = 0;
+        CHECK(!int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<char>::min());
+
+        lval = std::numeric_limits<char>::min();
+        rval = 1;
+        CHECK(int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<char>::min());
+
+        lval = std::numeric_limits<char>::min() + 1;
+        rval = 1;
+        CHECK(!int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<char>::min());
+
+        lval = std::numeric_limits<char>::min() + 1;
+        rval = 2;
+        CHECK(int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<char>::min() + 1);
+
+        lval = 0;
+        rval = -1 * std::numeric_limits<char>::min();
+        CHECK(!int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<char>::min());
+
+        lval = -1;
+        rval = -1 * std::numeric_limits<char>::min();
+        CHECK(int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, -1);
+    }
+    {   // unsigned and signed
+        size_t lval = std::numeric_limits<size_t>::min();
+        char rval = 0;
+        CHECK(!int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::min());
+
+        lval = std::numeric_limits<size_t>::min();
+        rval = 1;
+        CHECK(int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::min());
+
+        lval = std::numeric_limits<size_t>::max();
+        rval = 1;
+        CHECK(!int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::max() - 1);
+
+        lval = std::numeric_limits<size_t>::max();
+        rval = 0;
+        CHECK(!int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::max());
+
+        lval = std::numeric_limits<size_t>::max();
+        rval = -1;
+        CHECK(int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::max());
+
+        // lval::bits < rval::bits
+        unsigned char lval2 = 0;
+        int64_t rval2 = 1;
+        CHECK(int_subtract_with_overflow_detect(lval2, rval2));
+        CHECK_EQUAL(lval2, 0);
+
+        lval2 = std::numeric_limits<unsigned char>::max();
+        rval2 = std::numeric_limits<unsigned char>::max();
+        CHECK(!int_subtract_with_overflow_detect(lval2, rval2));
+        CHECK_EQUAL(lval2, 0);
+
+        lval2 = std::numeric_limits<unsigned char>::max();
+        rval2 = std::numeric_limits<unsigned char>::max() + 1;
+        CHECK(int_subtract_with_overflow_detect(lval2, rval2));
+        CHECK_EQUAL(lval2, std::numeric_limits<unsigned char>::max());
+    }
+    {   // unsigned and unsigned
+        size_t lval = std::numeric_limits<size_t>::min();
+        size_t rval = 0;
+        CHECK(!int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::min());
+
+        lval = std::numeric_limits<size_t>::min();
+        rval = 1;
+        CHECK(int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::min());
+
+        lval = 0;
+        rval = std::numeric_limits<size_t>::max();
+        CHECK(int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, 0);
+
+        lval = std::numeric_limits<size_t>::max() - 1;
+        rval = std::numeric_limits<size_t>::max();
+        CHECK(int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, std::numeric_limits<size_t>::max() - 1);
+
+        lval = std::numeric_limits<size_t>::max();
+        rval = std::numeric_limits<size_t>::max();
+        CHECK(!int_subtract_with_overflow_detect(lval, rval));
+        CHECK_EQUAL(lval, 0);
+    }
+}
+
+
+TEST(SafeIntOps_Comparisons)
+{
+    int lval = 0;
+    unsigned char rval = 0;
+    CHECK(int_equal_to(lval, rval));
+    CHECK(!int_not_equal_to(lval, rval));
+    CHECK(!int_less_than(lval, rval));
+    CHECK(int_less_than_or_equal(lval, rval));
+    CHECK(!int_greater_than(lval, rval));
+    CHECK(int_greater_than_or_equal(lval, rval));
+
+    lval = std::numeric_limits<int>::max();
+    rval = std::numeric_limits<unsigned char>::max();
+    CHECK(!int_equal_to(lval, rval));
+    CHECK(int_not_equal_to(lval, rval));
+    CHECK(!int_less_than(lval, rval));
+    CHECK(!int_less_than_or_equal(lval, rval));
+    CHECK(int_greater_than(lval, rval));
+    CHECK(int_greater_than_or_equal(lval, rval));
+}
+
+
+TEST(SafeIntOps_MultiplyOverflow)
+{
+    int lval = 256;
+    char rval = 2;
+    CHECK(!int_multiply_with_overflow_detect(lval, rval));
+    CHECK_EQUAL(lval, 512);
+
+    lval = std::numeric_limits<int>::max();
+    rval = 2;
+    CHECK(int_multiply_with_overflow_detect(lval, rval));
+    CHECK_EQUAL(lval, std::numeric_limits<int>::max());
+
+    char lval2 = 2;
+    int rval2 = 63;
+    CHECK(!int_multiply_with_overflow_detect(lval2, rval2));
+    CHECK_EQUAL(lval2, 126);
+
+    lval2 = 2;
+    rval2 = 64; // numeric_limits<char>::max() is 127
+    CHECK(int_multiply_with_overflow_detect(lval2, rval2));
+    CHECK_EQUAL(lval2, 2);
+}
+
+
+TEST(SafeIntOps_IntCast)
+{
+    int64_t signed_int = std::numeric_limits<char>::max() + 1;
+    char signed_char = 0;
+    CHECK(int_cast_with_overflow_detect(signed_int, signed_char));
+    CHECK_EQUAL(signed_char, 0);
+
+    signed_int = std::numeric_limits<char>::max();
+    signed_char = 0;
+    CHECK(!int_cast_with_overflow_detect(signed_int, signed_char));
+    CHECK_EQUAL(signed_char, std::numeric_limits<char>::max());
+
+    signed_int = std::numeric_limits<char>::min();
+    signed_char = 0;
+    CHECK(!int_cast_with_overflow_detect(signed_int, signed_char));
+    CHECK_EQUAL(signed_int, signed_char);
+
+    signed_int = std::numeric_limits<char>::min() - 1;
+    signed_char = 0;
+    CHECK(int_cast_with_overflow_detect(signed_int, signed_char));
+    CHECK_EQUAL(signed_char, 0);
+
+    signed_char = std::numeric_limits<char>::max();
+    signed_int = 0;
+    CHECK(!int_cast_with_overflow_detect(signed_char, signed_int));
+    CHECK_EQUAL(signed_int, signed_char);
+
+    signed_char = std::numeric_limits<char>::min();
+    signed_int = 0;
+    CHECK(!int_cast_with_overflow_detect(signed_char, signed_int));
+    CHECK_EQUAL(signed_int, signed_char);
+}
+
+
+TEST(SafeIntOps_ShiftLeft)
+{
+    size_t unsigned_int = 1;
+    CHECK(!int_shift_left_with_overflow_detect(unsigned_int, 0));
+    CHECK_EQUAL(unsigned_int, 1);
+
+    unsigned_int = 0;
+    CHECK(!int_shift_left_with_overflow_detect(unsigned_int, 1));
+    CHECK_EQUAL(unsigned_int, 0);
+
+    unsigned_int = 1;
+    CHECK(!int_shift_left_with_overflow_detect(unsigned_int, 1));
+    CHECK_EQUAL(unsigned_int, 2);
+
+    unsigned_int = 1;
+    CHECK(!int_shift_left_with_overflow_detect(unsigned_int, std::numeric_limits<size_t>::digits - 1));
+    CHECK_EQUAL(unsigned_int, size_t(1) << (std::numeric_limits<size_t>::digits - 1));
+
+// Shifting by 64 (or greater) is not defined behaviour.
+// With clang, the following does not overflow and gives unsigned_int == 1
+//    unsigned_int = 1;
+//    CHECK(int_shift_left_with_overflow_detect(unsigned_int, std::numeric_limits<size_t>::digits));
+//    CHECK_EQUAL(unsigned_int, 1);
+
+    unsigned_int = 2;
+    CHECK(int_shift_left_with_overflow_detect(unsigned_int, std::numeric_limits<size_t>::digits - 1));
+    CHECK_EQUAL(unsigned_int, 2);
+
+    unsigned_int = std::numeric_limits<size_t>::max();
+    CHECK(int_shift_left_with_overflow_detect(unsigned_int, 1));
+    CHECK_EQUAL(unsigned_int, std::numeric_limits<size_t>::max());
+
+    int signed_int = 1;
+    CHECK(!int_shift_left_with_overflow_detect(signed_int, 0));
+    CHECK_EQUAL(signed_int, 1);
+
+    signed_int = 0;
+    CHECK(!int_shift_left_with_overflow_detect(signed_int, 1));
+    CHECK_EQUAL(signed_int, 0);
+
+    signed_int = 1;
+    CHECK(!int_shift_left_with_overflow_detect(signed_int, 1));
+    CHECK_EQUAL(signed_int, 2);
+
+    signed_int = 1;
+    CHECK(!int_shift_left_with_overflow_detect(signed_int, std::numeric_limits<int>::digits - 1));
+    CHECK_EQUAL(signed_int, int(1) << (std::numeric_limits<int>::digits - 1));
+
+    signed_int = 2;
+    CHECK(int_shift_left_with_overflow_detect(signed_int, std::numeric_limits<int>::digits - 1));
+    CHECK_EQUAL(signed_int, 2);
+
+    signed_int = std::numeric_limits<int>::max();
+    CHECK(int_shift_left_with_overflow_detect(signed_int, 1));
+    CHECK_EQUAL(signed_int, std::numeric_limits<int>::max());
+}
+
+
+TEST(SafeIntOps_IsNegative)
+{
+    size_t unsigned_int = 0;
+    CHECK(!is_negative(unsigned_int));
+
+    unsigned_int = size_t(-1);
+    CHECK(!is_negative(unsigned_int));
+
+    char c = 0;
+    CHECK(!is_negative(c));
+
+    c = 1;
+    CHECK(!is_negative(c));
+
+    c = std::numeric_limits<char>::max();
+    CHECK(!is_negative(c));
+
+    c = char(-1);
+    CHECK(is_negative(c));
+
+    c = std::numeric_limits<char>::min();
+    CHECK(is_negative(c));
+}
+
+
+TEST(SafeIntOps_CastToUnsigned)
+{
+    size_t from_unsigned = size_t(-1);
+    size_t to_unsigned = cast_to_unsigned<size_t>(from_unsigned);
+    CHECK_EQUAL(to_unsigned, from_unsigned);
+
+    int from_signed = 1;
+    bool to_bool = cast_to_unsigned<bool>(from_signed);
+    CHECK_EQUAL(to_bool, true);
+
+    from_signed = 2;
+    to_bool = cast_to_unsigned<bool>(from_signed);
+    CHECK_EQUAL(to_bool, false);
+    to_unsigned = cast_to_unsigned<size_t>(from_signed);
+    CHECK_EQUAL(to_unsigned, 2);
+
+    from_signed = -1;
+    to_bool = cast_to_unsigned<bool>(from_signed);
+    CHECK_EQUAL(to_bool, true);
+    to_unsigned = cast_to_unsigned<size_t>(from_signed);
+    CHECK_EQUAL(to_unsigned, size_t(-1));
+
+    from_signed = -2;
+    to_bool = cast_to_unsigned<bool>(from_signed);
+    CHECK_EQUAL(to_bool, false);
+    to_unsigned = cast_to_unsigned<size_t>(from_signed);
+    CHECK_EQUAL(to_unsigned, size_t(-2));
 }
 
 
 namespace {
 
-template<class T_1, class T_2>
-void test_two_args(TestResults& test_results, const std::set<super_int>& values)
+template <class T_1, class T_2>
+void test_two_args(TestContext& test_context, const std::set<super_int>& values)
 {
-//    if (!(SameType<T_1, bool>::value && SameType<T_2, char>::value))
-//        return;
+    //    if (!(std::is_same<T_1, bool>::value && std::is_same<T_2, char>::value))
+    //        return;
 
-//    std::cerr << get_type_name<T_1>() << ", " << get_type_name<T_2>() << "\n";
+    //    std::cerr << get_type_name<T_1>() << ", " << get_type_name<T_2>() << "\n";
     std::vector<T_1> values_1;
     std::vector<T_2> values_2;
     {
@@ -106,7 +560,7 @@ void test_two_args(TestResults& test_results, const std::set<super_int>& values)
     iter_2 end_2 = values_2.end();
     for (iter_1 i_1 = values_1.begin(); i_1 != end_1; ++i_1) {
         for (iter_2 i_2 = values_2.begin(); i_2 != end_2; ++i_2) {
-//            std::cout << "--> " << promote(*i_1) << " vs " << promote(*i_2) << "\n";
+            //            std::cout << "--> " << promote(*i_1) << " vs " << promote(*i_2) << "\n";
             // Comparisons
             {
                 T_1 v_1 = *i_1;
@@ -136,8 +590,7 @@ void test_two_args(TestResults& test_results, const std::set<super_int>& values)
                 T_1 v_1 = *i_1;
                 T_2 v_2 = *i_2;
                 super_int s_1(v_1), s_2(v_2);
-                bool add_overflow_1 = s_1.add_with_overflow_detect(s_2) ||
-                    s_1.cast_has_overflow<T_1>();
+                bool add_overflow_1 = s_1.add_with_overflow_detect(s_2) || s_1.cast_has_overflow<T_1>();
                 bool add_overflow_2 = int_add_with_overflow_detect(v_1, v_2);
                 CHECK_EQUAL(add_overflow_1, add_overflow_2);
                 if (!add_overflow_1 && !add_overflow_2)
@@ -148,14 +601,13 @@ void test_two_args(TestResults& test_results, const std::set<super_int>& values)
                 T_1 v_1 = *i_1;
                 T_2 v_2 = *i_2;
                 super_int s_1(v_1), s_2(v_2);
-                bool sub_overflow_1 = s_1.subtract_with_overflow_detect(s_2) ||
-                    s_1.cast_has_overflow<T_1>();
+                bool sub_overflow_1 = s_1.subtract_with_overflow_detect(s_2) || s_1.cast_has_overflow<T_1>();
                 bool sub_overflow_2 = int_subtract_with_overflow_detect(v_1, v_2);
                 CHECK_EQUAL(sub_overflow_1, sub_overflow_2);
                 if (!sub_overflow_1 && !sub_overflow_2)
                     CHECK_EQUAL(s_1, super_int(v_1));
             }
-/*
+            /*
             // Multiplication
             {
                 T_1 v_1 = *i_1;
@@ -170,30 +622,31 @@ void test_two_args(TestResults& test_results, const std::set<super_int>& values)
                         CHECK_EQUAL(s_1, super_int(v_1));
                 }
             }
-*/
+            */
         }
     }
 }
 
 
-typedef void                                           types_00;
-typedef TypeAppend<types_00, bool>::type               types_01;
-typedef TypeAppend<types_01, char>::type               types_02;
-typedef TypeAppend<types_02, signed char>::type        types_03;
-typedef TypeAppend<types_03, unsigned char>::type      types_04;
-typedef TypeAppend<types_04, wchar_t>::type            types_05;
-typedef TypeAppend<types_05, short>::type              types_06;
-typedef TypeAppend<types_06, unsigned short>::type     types_07;
-typedef TypeAppend<types_07, int>::type                types_08;
-typedef TypeAppend<types_08, unsigned>::type           types_09;
-typedef TypeAppend<types_09, long>::type               types_10;
-typedef TypeAppend<types_10, unsigned long>::type      types_11;
-typedef TypeAppend<types_11, long long>::type          types_12;
+typedef void types_00;
+typedef TypeAppend<types_00, bool>::type types_01;
+typedef TypeAppend<types_01, char>::type types_02;
+typedef TypeAppend<types_02, signed char>::type types_03;
+typedef TypeAppend<types_03, unsigned char>::type types_04;
+typedef TypeAppend<types_04, wchar_t>::type types_05;
+typedef TypeAppend<types_05, short>::type types_06;
+typedef TypeAppend<types_06, unsigned short>::type types_07;
+typedef TypeAppend<types_07, int>::type types_08;
+typedef TypeAppend<types_08, unsigned>::type types_09;
+typedef TypeAppend<types_09, long>::type types_10;
+typedef TypeAppend<types_10, unsigned long>::type types_11;
+typedef TypeAppend<types_11, long long>::type types_12;
 typedef TypeAppend<types_12, unsigned long long>::type types_13;
 typedef types_13 types;
 
 
-template<class T, int> struct add_min_max {
+template <class T, int>
+struct add_min_max {
     static void exec(std::set<super_int>* values)
     {
         typedef std::numeric_limits<T> lim;
@@ -202,21 +655,22 @@ template<class T, int> struct add_min_max {
     }
 };
 
-template<class T_1, int> struct test_two_args_1 {
-    template<class T_2, int> struct test_two_args_2 {
-        static void exec(TestResults* test_results, const std::set<super_int>* values)
+template <class T_1, int>
+struct test_two_args_1 {
+    template <class T_2, int>
+    struct test_two_args_2 {
+        static void exec(TestContext* test_context, const std::set<super_int>* values)
         {
-            test_two_args<T_1, T_2>(*test_results, *values);
+            test_two_args<T_1, T_2>(*test_context, *values);
         }
     };
-    static void exec(TestResults* test_results, const std::set<super_int>* values)
+    static void exec(TestContext* test_context, const std::set<super_int>* values)
     {
-        ForEachType<types, test_two_args_2>::exec(test_results, values);
+        ForEachType<types, test_two_args_2>::exec(test_context, values);
     }
 };
 
 } // anonymous namespace
-
 
 
 TEST_IF(SafeIntOps_General, TEST_DURATION >= 1)
@@ -269,14 +723,14 @@ TEST_IF(SafeIntOps_General, TEST_DURATION >= 1)
         }
     }
 
-/*
+    /*
     {
         typedef std::set<super_int>::const_iterator iter;
         iter end = values.end();
         for (iter i = values.begin(); i != end; ++i)
             std::cout << *i << "\n";
     }
-*/
+    */
 
-    ForEachType<types, test_two_args_1>::exec(&test_results, &values);
+    ForEachType<types, test_two_args_1>::exec(&test_context, &values);
 }

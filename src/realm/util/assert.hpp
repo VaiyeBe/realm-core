@@ -1,93 +1,107 @@
 /*************************************************************************
  *
- * REALM CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] Realm Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of Realm Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to Realm Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from Realm Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
+
 #ifndef REALM_UTIL_ASSERT_HPP
 #define REALM_UTIL_ASSERT_HPP
 
 #include <realm/util/features.h>
 #include <realm/util/terminate.hpp>
-#include <realm/version.hpp>
 
-#if defined(REALM_ENABLE_ASSERTIONS) || defined(REALM_DEBUG)
-#  define REALM_ASSERTIONS_ENABLED 1
+#if REALM_ENABLE_ASSERTIONS || defined(REALM_DEBUG)
+#define REALM_ASSERTIONS_ENABLED 1
+#else
+#define REALM_ASSERTIONS_ENABLED 0
 #endif
 
-#define REALM_ASSERT_RELEASE(condition) \
-    ((condition) ? static_cast<void>(0) : \
-    realm::util::terminate(REALM_VER_CHUNK " Assertion failed: " #condition, __FILE__, __LINE__))
+#define REALM_ASSERT_RELEASE(condition)                                                                              \
+    (REALM_LIKELY(condition) ? static_cast<void>(0)                                                                  \
+                             : realm::util::terminate("Assertion failed: " #condition, __FILE__, __LINE__))
 
 #if REALM_ASSERTIONS_ENABLED
-#  define REALM_ASSERT(condition) REALM_ASSERT_RELEASE(condition)
+#define REALM_ASSERT(condition) REALM_ASSERT_RELEASE(condition)
 #else
-#  define REALM_ASSERT(condition) static_cast<void>(0)
+#define REALM_ASSERT(condition) static_cast<void>(sizeof bool(condition))
 #endif
 
 #ifdef REALM_DEBUG
-#  define REALM_ASSERT_DEBUG(condition) REALM_ASSERT_RELEASE(condition)
+#define REALM_ASSERT_DEBUG(condition) REALM_ASSERT_RELEASE(condition)
 #else
-#  define REALM_ASSERT_DEBUG(condition) static_cast<void>(0)
+#define REALM_ASSERT_DEBUG(condition) static_cast<void>(sizeof bool(condition))
 #endif
 
-// Becase the assert is used in noexcept methods, it's a bad idea to allocate buffer space for the message
-// so therefore we must pass it to terminate which will 'cerr' it for us without needing any buffer
-#if defined(REALM_ENABLE_ASSERTIONS) || defined(REALM_DEBUG)
-#  define REALM_ASSERT_3(left, condition, right) \
-    ((left condition right) ? static_cast<void>(0) : \
-        realm::util::terminate(REALM_VER_CHUNK " Assertion failed: " #left " " #condition " " #right, \
-                                 __FILE__, __LINE__, left, right))
+#define REALM_STRINGIFY(X) #X
 
-#  define REALM_ASSERT_7(left1, condition1, right1, logical, left2, condition2, right2) \
-    ((left1 condition1 right1 logical left2 condition2 right2) ? static_cast<void>(0) : \
-        realm::util::terminate(REALM_VER_CHUNK " Assertion failed: " #left1 " " #condition1 " " #right1 " " #logical " " #left2 " " #condition2 " " #right2, \
-                                 __FILE__, __LINE__, left1, right1, left2, right2))
+#define REALM_ASSERT_RELEASE_EX(condition, ...)                                                                      \
+    (REALM_LIKELY(condition) ? static_cast<void>(0)                                                                  \
+                             : realm::util::terminate_with_info("Assertion failed: " #condition, __LINE__, __FILE__, \
+                                                                REALM_STRINGIFY((__VA_ARGS__)), __VA_ARGS__))
 
-#  define REALM_ASSERT_11(left1, condition1, right1, logical1, left2, condition2, right2, logical2, left3, condition3, right3) \
-    ((left1 condition1 right1 logical1 left2 condition2 right2 logical2 left3 condition3 right3) ? static_cast<void>(0) : \
-        realm::util::terminate(REALM_VER_CHUNK " Assertion failed: " #left1 " " #condition1 " " #right1 " " #logical1 " " #left2 " " #condition2 " " #right2 " " #logical2 " " #left3 " " #condition3 " " #right3, \
-                                 __FILE__, __LINE__, left1, right1, left2, right2, left3, right3))
+#ifdef REALM_DEBUG
+#define REALM_ASSERT_DEBUG_EX REALM_ASSERT_RELEASE_EX
 #else
-#  define REALM_ASSERT_3(left, condition, right) static_cast<void>(0)
-#  define REALM_ASSERT_7(left1, condition1, right1, logical, left2, condition2, right2) static_cast<void>(0)
-#  define REALM_ASSERT_11(left1, condition1, right1, logical1, left2, condition2, right2, logical3, left3, condition3, right3) static_cast<void>(0)
+#define REALM_ASSERT_DEBUG_EX(condition, ...) static_cast<void>(sizeof bool(condition))
 #endif
 
-#define REALM_UNREACHABLE() \
-    realm::util::terminate(REALM_VER_CHUNK " Unreachable code", __FILE__, __LINE__)
+// Becase the assert is used in noexcept methods, it's a bad idea to allocate
+// buffer space for the message so therefore we must pass it to terminate which
+// will 'cerr' it for us without needing any buffer
+#if REALM_ENABLE_ASSERTIONS || defined(REALM_DEBUG)
 
+#define REALM_ASSERT_EX REALM_ASSERT_RELEASE_EX
 
-#ifdef REALM_HAVE_CXX11_STATIC_ASSERT
-#  define REALM_STATIC_ASSERT(condition, message) static_assert(condition, message)
+#define REALM_ASSERT_3(left, cmp, right)                                                                             \
+    (REALM_LIKELY((left)cmp(right)) ? static_cast<void>(0)                                                           \
+                                    : realm::util::terminate("Assertion failed: "                                    \
+                                                             "" #left " " #cmp " " #right,                           \
+                                                             __FILE__, __LINE__, left, right))
+
+#define REALM_ASSERT_7(left1, cmp1, right1, logical, left2, cmp2, right2)                                            \
+    (REALM_LIKELY(((left1)cmp1(right1))logical((left2)cmp2(right2)))                                                 \
+         ? static_cast<void>(0)                                                                                      \
+         : realm::util::terminate("Assertion failed: "                                                               \
+                                  "" #left1 " " #cmp1 " " #right1 " " #logical " "                                   \
+                                  "" #left2 " " #cmp2 " " #right2,                                                   \
+                                  __FILE__, __LINE__, left1, right1, left2, right2))
+
+#define REALM_ASSERT_11(left1, cmp1, right1, logical1, left2, cmp2, right2, logical2, left3, cmp3, right3)           \
+    (REALM_LIKELY(((left1)cmp1(right1))logical1((left2)cmp2(right2)) logical2((left3)cmp3(right3)))                  \
+         ? static_cast<void>(0)                                                                                      \
+         : realm::util::terminate("Assertion failed: "                                                               \
+                                  "" #left1 " " #cmp1 " " #right1 " " #logical1 " "                                  \
+                                  "" #left2 " " #cmp2 " " #right2 " " #logical2 " "                                  \
+                                  "" #left3 " " #cmp3 " " #right3,                                                   \
+                                  __FILE__, __LINE__, left1, right1, left2, right2, left3, right3))
 #else
-#  define REALM_STATIC_ASSERT(condition, message) typedef \
-    realm::util::static_assert_dummy<sizeof(realm::util:: \
-        REALM_STATIC_ASSERTION_FAILURE<bool(condition)>)> \
-    REALM_JOIN(_realm_static_assert_, __LINE__) REALM_UNUSED
-#  define REALM_JOIN(x,y) REALM_JOIN2(x,y)
-#  define REALM_JOIN2(x,y) x ## y
-namespace realm {
-namespace util {
-    template<bool> struct REALM_STATIC_ASSERTION_FAILURE;
-    template<> struct REALM_STATIC_ASSERTION_FAILURE<true> {};
-    template<int> struct static_assert_dummy {};
-}
-}
+#define REALM_ASSERT_EX(condition, ...) static_cast<void>(sizeof bool(condition))
+#define REALM_ASSERT_3(left, cmp, right) static_cast<void>(sizeof bool((left)cmp(right)))
+#define REALM_ASSERT_7(left1, cmp1, right1, logical, left2, cmp2, right2)                                            \
+    static_cast<void>(sizeof bool(((left1)cmp1(right1))logical((left2)cmp2(right2))))
+#define REALM_ASSERT_11(left1, cmp1, right1, logical1, left2, cmp2, right2, logical2, left3, cmp3, right3)           \
+    static_cast<void>(sizeof bool(((left1)cmp1(right1))logical1((left2)cmp2(right2)) logical2((left3)cmp3(right3))))
 #endif
 
+#define REALM_UNREACHABLE() realm::util::terminate("Unreachable code", __FILE__, __LINE__)
+#ifdef REALM_COVER
+#define REALM_COVER_NEVER(x) false
+#define REALM_COVER_ALWAYS(x) true
+#else
+#define REALM_COVER_NEVER(x) (x)
+#define REALM_COVER_ALWAYS(x) (x)
+#endif
 
 #endif // REALM_UTIL_ASSERT_HPP

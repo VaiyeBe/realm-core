@@ -1,14 +1,40 @@
-#include "realm/array_integer.hpp"
-#include "realm/column.hpp"
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
 
 #include <vector>
 
+#include <realm/array_integer.hpp>
+#include <realm/column.hpp>
+#include <realm/impl/destroy_guard.hpp>
+
 using namespace realm;
+
+
+void ArrayInteger::create(Array::Type type, bool context_flag)
+{
+    Array::create(type, context_flag, 0, 0);
+}
+
 
 // Find max and min value, but break search if difference exceeds 'maxdiff' (in which case *min and *max is set to 0)
 // Useful for counting-sort functions
 template <size_t w>
-bool ArrayInteger::minmax(size_t from, size_t to, uint64_t maxdiff, int64_t *min, int64_t *max) const
+bool ArrayInteger::minmax(size_t from, size_t to, uint64_t maxdiff, int64_t* min, int64_t* max) const
 {
     int64_t min2;
     int64_t max2;
@@ -45,41 +71,85 @@ bool ArrayInteger::minmax(size_t from, size_t to, uint64_t maxdiff, int64_t *min
 }
 
 
-std::vector<int64_t> ArrayInteger::ToVector() const
+std::vector<int64_t> ArrayInteger::to_vector() const
 {
     std::vector<int64_t> v;
-    const size_t count = size();
-    for (size_t t = 0; t < count; ++t)
+    const size_t array_size = size();
+    for (size_t t = 0; t < array_size; ++t)
         v.push_back(Array::get(t));
     return v;
 }
 
-MemRef ArrayIntNull::create_array(Type type, bool context_flag, std::size_t size, int_fast64_t value, Allocator& alloc)
+// if value does not contain an integer, then create an all 0 array with 0 also represeting null
+// if value contains an integer, make sure to pick a different integer to represent null
+MemRef ArrayIntNull::create_array(Type type, bool context_flag, size_t size, value_type value, Allocator& alloc)
 {
-    MemRef r = Array::create(type, context_flag, wtype_Bits, size + 1, value, alloc);
+    int64_t val = value.value_or(0);
+    MemRef r = Array::create(type, context_flag, wtype_Bits, size + 1, val, alloc); // Throws
     ArrayIntNull arr(alloc);
-    arr.init_from_mem(r);
-    if (arr.m_width == 64) {
-        int_fast64_t null_value = value ^ 1; // Just anything different from value.
-        arr.Array::set(0, null_value);
+    _impl::DestroyGuard<ArrayIntNull> dg(&arr);
+    arr.Array::init_from_mem(r);
+    if (value) {
+        if (arr.m_width == 64) {
+            int_fast64_t null_value = val ^ 1; // Just anything different from value.
+            arr.Array::set(0, null_value);     // Throws
+        }
+        else {
+            // For all other bit widths, we use the upper bound to represent null (also stored at index 0).
+            int_fast64_t null_value = arr.m_ubound;
+            if (val == null_value) {
+                // the initial value is equal to the existing upper bound, so expand to next bit width
+                int_fast64_t next_upper_bound = ubound_for_width(bit_width(arr.m_ubound + 1));
+                null_value = next_upper_bound;
+            }
+            arr.Array::set(0, null_value); // Throws
+        }
     }
-    else {
-        arr.Array::set(0, arr.m_ubound);
+    dg.release();
+    return arr.get_mem();
+}
+
+
+void ArrayIntNull::init_from_ref(ref_type ref) noexcept
+{
+    REALM_ASSERT_DEBUG(ref);
+    char* header = m_alloc.translate(ref);
+    init_from_mem(MemRef{header, ref, m_alloc});
+}
+
+void ArrayIntNull::init_from_mem(MemRef mem) noexcept
+{
+    Array::init_from_mem(mem);
+
+    if (m_size == 0) {
+        // This can only happen when mem is being reused from another
+        // array (which happens when shrinking the B+tree), so we need
+        // to add the "magic" null value to the beginning.
+
+        // Since init_* functions are noexcept, but insert() isn't, we
+        // need to ensure that insert() will not allocate.
+        REALM_ASSERT(m_capacity != 0);
+        Array::insert(0, m_ubound);
     }
-    return r;
+}
+
+void ArrayIntNull::init_from_parent() noexcept
+{
+    init_from_ref(get_ref_from_parent());
 }
 
 namespace {
-    int64_t next_null_candidate(int64_t previous_candidate) {
-        uint64_t x = static_cast<uint64_t>(previous_candidate);
-        // Increment by a prime number. This guarantees that we will
-        // eventually hit every possible integer in the 2^64 range.
-        x += 0xfffffffbULL;
-        return static_cast<int64_t>(x);
-    }
+int64_t next_null_candidate(int64_t previous_candidate)
+{
+    uint64_t x = static_cast<uint64_t>(previous_candidate);
+    // Increment by a prime number. This guarantees that we will
+    // eventually hit every possible integer in the 2^64 range.
+    x += 0xfffffffbULL;
+    return util::from_twos_compl<int64_t>(x);
+}
 }
 
-int_fast64_t ArrayIntNull::choose_random_null(int64_t incoming)
+int_fast64_t ArrayIntNull::choose_random_null(int64_t incoming) const
 {
     // We just need any number -- it could have been `rand()`, but
     // random numbers are hard, and we don't want to risk locking mutices
@@ -97,18 +167,18 @@ int_fast64_t ArrayIntNull::choose_random_null(int64_t incoming)
     }
 }
 
-bool ArrayIntNull::can_use_as_null(int64_t candidate)
+bool ArrayIntNull::can_use_as_null(int64_t candidate) const
 {
     return find_first(candidate) == npos;
 }
 
 void ArrayIntNull::replace_nulls_with(int64_t new_null)
 {
-    int64_t old_null = Array::get(0);
+    int64_t old_null = null_value();
     Array::set(0, new_null);
-    std::size_t i = 1;
+    size_t i = 1;
     while (true) {
-        std::size_t found = Array::find_first(old_null, i);
+        size_t found = Array::find_first(old_null, i);
         if (found < Array::size()) {
             Array::set(found, new_null);
             i = found + 1;
@@ -120,7 +190,7 @@ void ArrayIntNull::replace_nulls_with(int64_t new_null)
 }
 
 
-void ArrayIntNull::ensure_not_null(int64_t value)
+void ArrayIntNull::avoid_null_collision(int64_t value)
 {
     if (m_width == 64) {
         if (value == null_value()) {
@@ -129,7 +199,7 @@ void ArrayIntNull::ensure_not_null(int64_t value)
         }
     }
     else {
-        if (value <= m_lbound || value >= m_ubound) {
+        if (value < m_lbound || value >= m_ubound) {
             size_t new_width = bit_width(value);
             int64_t new_upper_bound = Array::ubound_for_width(new_width);
 
@@ -155,12 +225,107 @@ void ArrayIntNull::ensure_not_null(int64_t value)
     }
 }
 
-void ArrayIntNull::find_all(Column* result, int64_t value, std::size_t col_offset, std::size_t begin, std::size_t end) const
+void ArrayIntNull::find_all(IntegerColumn* result, value_type value, size_t col_offset, size_t begin,
+                            size_t end) const
 {
-    ++begin;
-    if (end != npos) {
-        ++end;
+    // FIXME: We can't use the fast Array::find_all here, because it would put the wrong indices
+    // in the result column. Since find_all may be invoked many times for different leaves in the
+    // B+tree with the same result column, we also can't simply adjust indices after finding them
+    // (because then the first indices would be adjusted multiple times for each subsequent leaf)
+
+    if (end == npos) {
+        end = size();
     }
-    Array::find_all(result, value, col_offset, begin, end);
-    result->adjust(-1);
+
+    for (size_t i = begin; i < end; ++i) {
+        if (get(i) == value) {
+            result->add(col_offset + i);
+        }
+    }
+}
+
+
+void ArrayIntNull::get_chunk(size_t ndx, value_type res[8]) const noexcept
+{
+    // FIXME: Optimize this
+    int64_t tmp[8];
+    Array::get_chunk(ndx + 1, tmp);
+    int64_t null = null_value();
+    for (size_t i = 0; i < 8; ++i) {
+        res[i] = tmp[i] == null ? util::Optional<int64_t>() : tmp[i];
+    }
+}
+
+namespace {
+
+// FIXME: Move this logic to BpTree.
+struct ArrayIntNullLeafInserter {
+    static ref_type leaf_insert(Allocator& alloc, ArrayIntNull& self, size_t ndx, util::Optional<int64_t> value,
+                                TreeInsertBase& state)
+    {
+        size_t leaf_size = self.size();
+        REALM_ASSERT_DEBUG(leaf_size <= REALM_MAX_BPNODE_SIZE);
+        if (leaf_size < ndx)
+            ndx = leaf_size;
+        if (REALM_LIKELY(leaf_size < REALM_MAX_BPNODE_SIZE)) {
+            self.insert(ndx, value); // Throws
+            return 0;                // Leaf was not split
+        }
+
+        // Split leaf node
+        ArrayIntNull new_leaf(alloc);
+        new_leaf.create(Array::type_Normal); // Throws
+        if (ndx == leaf_size) {
+            new_leaf.add(value); // Throws
+            state.m_split_offset = ndx;
+        }
+        else {
+            for (size_t i = ndx; i < leaf_size; ++i) {
+                new_leaf.add(self.get(i)); // Throws
+            }
+            self.truncate(ndx); // Throws
+            self.add(value);    // Throws
+            state.m_split_offset = ndx + 1;
+        }
+        state.m_split_size = leaf_size + 1;
+        return new_leaf.get_ref();
+    }
+};
+
+} // anonymous namespace
+
+ref_type ArrayIntNull::bptree_leaf_insert(size_t ndx, value_type value, TreeInsertBase& state)
+{
+    return ArrayIntNullLeafInserter::leaf_insert(get_alloc(), *this, ndx, value, state);
+}
+
+MemRef ArrayIntNull::slice(size_t offset, size_t slice_size, Allocator& target_alloc) const
+{
+    // NOTE: It would be nice to consolidate this with Array::slice somehow.
+
+    REALM_ASSERT(is_attached());
+
+    Array array_slice(target_alloc);
+    _impl::DeepArrayDestroyGuard dg(&array_slice);
+    Type type = get_type();
+    array_slice.create(type, m_context_flag); // Throws
+    array_slice.add(null_value());
+
+    size_t begin = offset + 1;
+    size_t end = offset + slice_size + 1;
+    for (size_t i = begin; i != end; ++i) {
+        int_fast64_t value = Array::get(i);
+        array_slice.add(value); // Throws
+    }
+    dg.release();
+    return array_slice.get_mem();
+}
+
+MemRef ArrayIntNull::slice_and_clone_children(size_t offset, size_t slice_size, Allocator& target_alloc) const
+{
+    // NOTE: It would be nice to consolidate this with Array::slice_and_clone_children somehow.
+
+    REALM_ASSERT(is_attached());
+    REALM_ASSERT(!has_refs());
+    return slice(offset, slice_size, target_alloc);
 }
