@@ -1,13 +1,30 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include <map>
 
-#include <tightdb/array.hpp>
-#include <tightdb/impl/destroy_guard.hpp>
+#include <realm/array.hpp>
+#include <realm/impl/destroy_guard.hpp>
 
 #include "test.hpp"
 
-using namespace std;
-using namespace tightdb;
-using namespace tightdb::_impl;
+using namespace realm;
+using namespace realm::_impl;
 
 
 // Test independence and thread-safety
@@ -44,8 +61,8 @@ namespace {
 
 class Foo {
 public:
-    Foo(bool* destroyed_flag):
-        m_destroyed_flag(destroyed_flag)
+    Foo(bool* destroyed_flag)
+        : m_destroyed_flag(destroyed_flag)
     {
     }
 
@@ -58,45 +75,52 @@ private:
     bool* const m_destroyed_flag;
 };
 
-class FooAlloc: public Allocator {
+class FooAlloc : public Allocator {
 public:
-    FooAlloc():
-        m_offset(8)
+    FooAlloc()
+        : m_offset(8)
     {
         m_baseline = 8;
     }
 
-    ~FooAlloc() TIGHTDB_NOEXCEPT
+    ~FooAlloc() noexcept
     {
     }
 
-    MemRef do_alloc(size_t size) TIGHTDB_OVERRIDE
+    MemRef do_alloc(const size_t size) override
     {
         ref_type ref = m_offset;
         char*& addr = m_map[ref]; // Throws
-        TIGHTDB_ASSERT(!addr);
+        REALM_ASSERT(!addr);
         addr = new char[size]; // Throws
         m_offset += size;
-        return MemRef(addr, ref);
+        return MemRef(addr, ref, *this);
     }
 
-    void do_free(ref_type ref, const char* addr) TIGHTDB_NOEXCEPT TIGHTDB_OVERRIDE
+    MemRef do_realloc(ref_type, const char*, size_t, size_t) override
     {
-        typedef map<ref_type, char*>::iterator iter;
+        throw std::runtime_error("Not implemented");
+
+        return {};
+    }
+
+    void do_free(ref_type ref, const char* addr) noexcept override
+    {
+        typedef std::map<ref_type, char*>::iterator iter;
         iter i = m_map.find(ref);
-        TIGHTDB_ASSERT(i != m_map.end());
+        REALM_ASSERT(i != m_map.end());
         char* addr_2 = i->second;
-        TIGHTDB_ASSERT(addr_2 == addr);
+        REALM_ASSERT(addr_2 == addr);
         static_cast<void>(addr_2);
         m_map.erase(i);
         delete[] addr;
     }
 
-    char* do_translate(ref_type ref) const TIGHTDB_NOEXCEPT TIGHTDB_OVERRIDE
+    char* do_translate(ref_type ref) const noexcept override
     {
-        typedef map<ref_type, char*>::const_iterator iter;
+        typedef std::map<ref_type, char*>::const_iterator iter;
         iter i = m_map.find(ref);
-        TIGHTDB_ASSERT(i != m_map.end());
+        REALM_ASSERT(i != m_map.end());
         char* addr = i->second;
         return addr;
     }
@@ -108,7 +132,7 @@ public:
 
     void clear()
     {
-        typedef map<ref_type, char*>::const_iterator iter;
+        typedef std::map<ref_type, char*>::const_iterator iter;
         iter end = m_map.end();
         for (iter i = m_map.begin(); i != end; ++i) {
             char* addr = i->second;
@@ -117,15 +141,13 @@ public:
         m_map.clear();
     }
 
-#ifdef TIGHTDB_DEBUG
-    void Verify() const TIGHTDB_OVERRIDE
+    void verify() const override
     {
     }
-#endif
 
 private:
     ref_type m_offset;
-    map<ref_type, char*> m_map;
+    std::map<ref_type, char*> m_map;
 };
 
 } // anonymous namespace
@@ -182,7 +204,7 @@ TEST(DestroyGuard_ArrayShallow)
         {
             bool context_flag = false;
             MemRef child_mem = Array::create_empty_array(Array::type_Normal, context_flag, alloc);
-            int_fast64_t v(child_mem.m_ref);
+            int_fast64_t v(child_mem.get_ref());
             root.add(v);
         }
     }
@@ -239,9 +261,8 @@ TEST(DestroyGuard_ArrayDeep)
             root.create(Array::type_HasRefs);
             {
                 bool context_flag = false;
-                MemRef child_mem =
-                    Array::create_empty_array(Array::type_Normal, context_flag, alloc);
-                int_fast64_t v(child_mem.m_ref);
+                MemRef child_mem = Array::create_empty_array(Array::type_Normal, context_flag, alloc);
+                int_fast64_t v(child_mem.get_ref());
                 root.add(v);
             }
         }
@@ -259,8 +280,8 @@ TEST(DestroyGuard_ArrayRefDeep)
         {
             bool context_flag = false;
             MemRef mem = Array::create_empty_array(Array::type_Normal, context_flag, alloc);
-            DeepArrayRefDestroyGuard dg(mem.m_ref, alloc);
-            CHECK_EQUAL(mem.m_ref, dg.get());
+            DeepArrayRefDestroyGuard dg(mem.get_ref(), alloc);
+            CHECK_EQUAL(mem.get_ref(), dg.get());
         }
         CHECK(alloc.empty());
     }
@@ -270,8 +291,8 @@ TEST(DestroyGuard_ArrayRefDeep)
         {
             bool context_flag = false;
             MemRef mem = Array::create_empty_array(Array::type_Normal, context_flag, alloc);
-            DeepArrayRefDestroyGuard dg(mem.m_ref, alloc);
-            CHECK_EQUAL(mem.m_ref, dg.release());
+            DeepArrayRefDestroyGuard dg(mem.get_ref(), alloc);
+            CHECK_EQUAL(mem.get_ref(), dg.release());
         }
         CHECK(!alloc.empty());
         alloc.clear();
@@ -283,9 +304,9 @@ TEST(DestroyGuard_ArrayRefDeep)
             bool context_flag = false;
             DeepArrayRefDestroyGuard dg(alloc);
             MemRef mem_1 = Array::create_empty_array(Array::type_Normal, context_flag, alloc);
-            dg.reset(mem_1.m_ref);
+            dg.reset(mem_1.get_ref());
             MemRef mem_2 = Array::create_empty_array(Array::type_Normal, context_flag, alloc);
-            dg.reset(mem_2.m_ref);
+            dg.reset(mem_2.get_ref());
         }
         CHECK(alloc.empty());
     }
@@ -298,9 +319,8 @@ TEST(DestroyGuard_ArrayRefDeep)
                 Array root(alloc);
                 root.create(Array::type_HasRefs);
                 bool context_flag = false;
-                MemRef child_mem =
-                    Array::create_empty_array(Array::type_Normal, context_flag, alloc);
-                int_fast64_t v(child_mem.m_ref);
+                MemRef child_mem = Array::create_empty_array(Array::type_Normal, context_flag, alloc);
+                int_fast64_t v(child_mem.get_ref());
                 root.add(v);
                 root_ref = root.get_ref();
             }

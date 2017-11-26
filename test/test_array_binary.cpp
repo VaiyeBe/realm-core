@@ -1,11 +1,29 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "testsettings.hpp"
 #ifdef TEST_ARRAY_BINARY
 
-#include <tightdb/array_binary.hpp>
+#include <realm/array_binary.hpp>
 
 #include "test.hpp"
 
-using namespace tightdb;
+using namespace realm;
 
 
 // Test independence and thread-safety
@@ -45,9 +63,9 @@ TEST(ArrayBinary_Basic)
 
     // TEST(ArrayBinary_MultiEmpty)
 
-    c.add(BinaryData("", 0));
-    c.add(BinaryData("", 0));
-    c.add(BinaryData("", 0));
+    c.add(BinaryData());
+    c.add(BinaryData());
+    c.add(BinaryData());
     c.add(BinaryData());
     c.add(BinaryData());
     c.add(BinaryData());
@@ -87,7 +105,7 @@ TEST(ArrayBinary_Basic)
     CHECK_EQUAL(4, c.get(0).size());
     CHECK_EQUAL(1, c.size());
 
-    c.add(BinaryData("defg", 5)); //non-empty
+    c.add(BinaryData("defg", 5)); // non-empty
     CHECK_EQUAL("abc", c.get(0).data());
     CHECK_EQUAL("defg", c.get(1).data());
     CHECK_EQUAL(4, c.get(0).size());
@@ -221,10 +239,73 @@ TEST(ArrayBinary_Basic)
     CHECK_EQUAL(0, c.size());
     CHECK(c.is_empty());
 
+    c.destroy();
+}
 
-    // TEST(ArrayBinary_Destroy)
+TEST(ArrayBinary_Nulls)
+{
+    ArrayBinary c(Allocator::get_default());
+    c.create();
+
+    c.add(BinaryData());
+    c.add(BinaryData("", 0));
+    c.add(BinaryData("foo"));
+
+    CHECK(c.get(0).is_null());
+    CHECK(!c.get(1).is_null());
+    CHECK(!c.get(1).is_null());
+
+    // Contains
+    //      Null
+    CHECK(c.get(0).contains(c.get(0)));
+    CHECK(!c.get(0).contains(c.get(1)));
+    CHECK(!c.get(0).contains(c.get(2)));
+
+    //      Empty string
+    CHECK(c.get(1).contains(c.get(0)));
+    CHECK(c.get(1).contains(c.get(1)));
+    CHECK(!c.get(1).contains(c.get(2)));
+
+    //      "foo"
+    CHECK(c.get(2).contains(c.get(0)));
+    CHECK(c.get(2).contains(c.get(1)));
+    CHECK(c.get(2).contains(c.get(2)));
+
+
+    // Begins with
+    //      Null
+    CHECK(c.get(0).begins_with(c.get(0)));
+    CHECK(!c.get(0).begins_with(c.get(1)));
+    CHECK(!c.get(0).begins_with(c.get(2)));
+
+    //      Empty string
+    CHECK(c.get(1).begins_with(c.get(0)));
+    CHECK(c.get(1).begins_with(c.get(1)));
+    CHECK(!c.get(1).begins_with(c.get(2)));
+
+    //      "foo"
+    CHECK(c.get(2).begins_with(c.get(0)));
+    CHECK(c.get(2).begins_with(c.get(1)));
+    CHECK(c.get(2).begins_with(c.get(2)));
+
+    // Ends with
+    //      Null
+    CHECK(c.get(0).ends_with(c.get(0)));
+    CHECK(!c.get(0).ends_with(c.get(1)));
+    CHECK(!c.get(0).ends_with(c.get(2)));
+
+    //      Empty string
+    CHECK(c.get(1).ends_with(c.get(0)));
+    CHECK(c.get(1).ends_with(c.get(1)));
+    CHECK(!c.get(1).ends_with(c.get(2)));
+
+    //      "foo"
+    CHECK(c.get(2).ends_with(c.get(0)));
+    CHECK(c.get(2).ends_with(c.get(1)));
+    CHECK(c.get(2).ends_with(c.get(2)));
 
     c.destroy();
 }
+
 
 #endif // TEST_ARRAY_BINARY

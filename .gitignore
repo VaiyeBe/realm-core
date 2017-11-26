@@ -4,75 +4,80 @@
 *~
 cscope.*
 tags
+GPATH
+GRTAGS
+GTAGS
 
 /cover_html
 /gcovr.xml
 /tmp
+doc/html
+
+# CMake artifacts
+CMakeFiles
+CMakeCache.txt
+Testing
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+Realm.xcodeproj
+CMakeScripts
+/build*
 
 # Ignore all user files except one which includes execution path for test
 *.user
-!tighdb.vcxproj.user
+!Realm.vcxproj.user
 
-#ignore thumbnails created by windows
+# Ignore user folder attributes created by Apple
+.DS_Store
+
+# Ignore thumbnails created by windows
 Thumbs.db
-#Ignore files build by Visual Studio
-*.obj
-*.exe
-*.pdb
-*.aps
-*.pch
-*.vspscc
-*_i.c
-*_p.c
-*.tlb
-*.tlh
-*.bak
-*.cache
-*.ilk
-*.log
-[Bb]in
-[Dd]ebug*/
-*.lib
-*.sbr
-obj/
-ipch/
-[Rr]elease*/
-_ReSharper*/
-[Tt]est[Rr]esult*
-Static library*/
-*.opensdf
-*.sdf
 
-/tightdb.xcodeproj/project.xcworkspace
-/tightdb.xcodeproj/xcuserdata
+# Ignore files build by Visual Studio
+/.vs
+/Visual\ Studio
+
+# Ignore Eclipse settings
+/.settings
+
+*.dSYM
+
+# Ignore KDevelop4 user files
+.kdev4/*
 
 # ref doc
 /doc/ref_cpp/html/*
 
-# sh build.sh config
-/src/config.mk
+# sh build.sh build-cocoa
+/core-*.zip
+/macosx-lib/
+/ios-lib/
+/ios-no-bitcode-lib/
+/watchos-lib/
+/tvos-lib/
 
-# sh build.sh build-iphone
-/iphone-lib/include
-/iphone-lib/libtightdb-ios.a
-/iphone-lib/libtightdb-ios-dbg.a
-/iphone-lib/tightdb-config
-/iphone-lib/tightdb-config-dbg
+# sh build.sh build-dotnet-cocoa
+/realm-core-dotnet-cocoa*.zip
 
 # sh build.sh build-android
 /android-lib/
 /openssl/
-core-android-*.tar.gz
+/realm-core-android-*.tar.gz
 
 # debian/ubuntu builds
-/debian/tightdb/*
-/debian/libtightdb/*
-/debian/libtightdb-dev/*
-/debian/libtightdb-dev.substvars
-/debian/libtightdb.substvars
-/debian/tightdb.substvars
+/debian/realm/*
+/debian/librealm/*
+/debian/librealm-dev/*
+/debian/librealm-dev.substvars
+/debian/librealm.substvars
+/debian/realm.substvars
 /debian/files
 /debian/changelog
 /debian/debhelper.log
-/debian/libtightdb.debhelper.lo
-/debian/libtightdb-dev.debhelper.log
+/debian/librealm.debhelper.lo
+/debian/librealm-dev.debhelper.log
+
+# Ignore python compiled files
+*.pyc
+/test/android/jni/#Android.mk#

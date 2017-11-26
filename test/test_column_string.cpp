@@ -1,14 +1,34 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "testsettings.hpp"
 #ifdef TEST_COLUMN_STRING
 
-#include <tightdb/column_string.hpp>
-#include <tightdb/column_string_enum.hpp>
-#include <tightdb/index_string.hpp>
+#include <vector>
+#include <realm/column_string.hpp>
+#include <realm/column_string_enum.hpp>
+#include <realm/index_string.hpp>
 
 #include "test.hpp"
+#include "test_string_types.hpp"
 
-using namespace tightdb;
-
+using namespace realm;
+using namespace realm::test_util;
 
 // Test independence and thread-safety
 // -----------------------------------
@@ -40,10 +60,23 @@ using namespace tightdb;
 // check-testcase` (or one of its friends) from the command line.
 
 
-TEST(ColumnString_Basic)
+namespace {
+
+struct nullable {
+    static constexpr bool value = true;
+};
+
+struct non_nullable {
+    static constexpr bool value = false;
+};
+
+} // anonymous namespace
+
+
+TEST_TYPES(ColumnString_Basic, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    ref_type ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn c(Allocator::get_default(), ref);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& c = test_resources.get_column();
 
     // TEST(ColumnString_MultiEmpty)
 
@@ -93,14 +126,18 @@ TEST(ColumnString_Basic)
 
     c.clear();
     c.add();
-    CHECK_EQUAL("", c.get(0));
+
+    // for StringColumn the default value is dependent on nullability
+    StringData default_string_value = TEST_TYPE::is_nullable() ? realm::null() : StringData("");
+
+    CHECK_EQUAL(default_string_value, c.get(0));
     CHECK_EQUAL(1, c.size());
 
 
     // TEST(ColumnString_Add1)
 
     c.add("a");
-    CHECK_EQUAL("",  c.get(0));
+    CHECK_EQUAL(default_string_value, c.get(0));
     CHECK_EQUAL("a", c.get(1));
     CHECK_EQUAL(2, c.size());
 
@@ -108,8 +145,8 @@ TEST(ColumnString_Basic)
     // TEST(ColumnString_Add2)
 
     c.add("bb");
-    CHECK_EQUAL("",   c.get(0));
-    CHECK_EQUAL("a",  c.get(1));
+    CHECK_EQUAL(default_string_value, c.get(0));
+    CHECK_EQUAL("a", c.get(1));
     CHECK_EQUAL("bb", c.get(2));
     CHECK_EQUAL(3, c.size());
 
@@ -117,9 +154,9 @@ TEST(ColumnString_Basic)
     // TEST(ColumnString_Add3)
 
     c.add("ccc");
-    CHECK_EQUAL("",    c.get(0));
-    CHECK_EQUAL("a",   c.get(1));
-    CHECK_EQUAL("bb",  c.get(2));
+    CHECK_EQUAL(default_string_value, c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("bb", c.get(2));
     CHECK_EQUAL("ccc", c.get(3));
     CHECK_EQUAL(4, c.size());
 
@@ -127,10 +164,10 @@ TEST(ColumnString_Basic)
     // TEST(ColumnString_Add4)
 
     c.add("dddd");
-    CHECK_EQUAL("",     c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("bb",   c.get(2));
-    CHECK_EQUAL("ccc",  c.get(3));
+    CHECK_EQUAL(default_string_value, c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("bb", c.get(2));
+    CHECK_EQUAL("ccc", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL(5, c.size());
 
@@ -138,10 +175,10 @@ TEST(ColumnString_Basic)
     // TEST(ColumnString_Add8)
 
     c.add("eeeeeeee");
-    CHECK_EQUAL("",     c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("bb",   c.get(2));
-    CHECK_EQUAL("ccc",  c.get(3));
+    CHECK_EQUAL(default_string_value, c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("bb", c.get(2));
+    CHECK_EQUAL("ccc", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL("eeeeeeee", c.get(5));
     CHECK_EQUAL(6, c.size());
@@ -150,10 +187,10 @@ TEST(ColumnString_Basic)
     // TEST(ColumnString_Add16)
 
     c.add("ffffffffffffffff");
-    CHECK_EQUAL("",     c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("bb",   c.get(2));
-    CHECK_EQUAL("ccc",  c.get(3));
+    CHECK_EQUAL(default_string_value, c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("bb", c.get(2));
+    CHECK_EQUAL("ccc", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL("eeeeeeee", c.get(5));
     CHECK_EQUAL("ffffffffffffffff", c.get(6));
@@ -164,10 +201,10 @@ TEST(ColumnString_Basic)
 
     c.add("gggggggggggggggggggggggggggggggg");
 
-    CHECK_EQUAL("",     c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("bb",   c.get(2));
-    CHECK_EQUAL("ccc",  c.get(3));
+    CHECK_EQUAL(default_string_value, c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("bb", c.get(2));
+    CHECK_EQUAL("ccc", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL("eeeeeeee", c.get(5));
     CHECK_EQUAL("ffffffffffffffff", c.get(6));
@@ -180,10 +217,10 @@ TEST(ColumnString_Basic)
     // Add a string longer than 64 bytes to trigger long strings
     c.add("xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx");
 
-    CHECK_EQUAL("",     c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("bb",   c.get(2));
-    CHECK_EQUAL("ccc",  c.get(3));
+    CHECK_EQUAL(default_string_value, c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("bb", c.get(2));
+    CHECK_EQUAL("ccc", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL("eeeeeeee", c.get(5));
     CHECK_EQUAL("ffffffffffffffff", c.get(6));
@@ -201,10 +238,10 @@ TEST(ColumnString_Basic)
 
     CHECK_EQUAL(9, c.size());
 
-    CHECK_EQUAL("ccc",  c.get(0));
-    CHECK_EQUAL("bb",   c.get(1));
-    CHECK_EQUAL("a",    c.get(2));
-    CHECK_EQUAL("",     c.get(3));
+    CHECK_EQUAL("ccc", c.get(0));
+    CHECK_EQUAL("bb", c.get(1));
+    CHECK_EQUAL("a", c.get(2));
+    CHECK_EQUAL("", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL("eeeeeeee", c.get(5));
     CHECK_EQUAL("ffffffffffffffff", c.get(6));
@@ -219,11 +256,11 @@ TEST(ColumnString_Basic)
 
     CHECK_EQUAL(10, c.size());
 
-    CHECK_EQUAL("ccc",  c.get(0));
-    CHECK_EQUAL("bb",   c.get(1));
-    CHECK_EQUAL("a",    c.get(2));
-    CHECK_EQUAL("",     c.get(3));
-    CHECK_EQUAL("xx",   c.get(4));
+    CHECK_EQUAL("ccc", c.get(0));
+    CHECK_EQUAL("bb", c.get(1));
+    CHECK_EQUAL("a", c.get(2));
+    CHECK_EQUAL("", c.get(3));
+    CHECK_EQUAL("xx", c.get(4));
     CHECK_EQUAL("dddd", c.get(5));
     CHECK_EQUAL("eeeeeeee", c.get(6));
     CHECK_EQUAL("ffffffffffffffff", c.get(7));
@@ -234,15 +271,15 @@ TEST(ColumnString_Basic)
     // TEST(ColumnString_Delete1)
 
     // Delete from end
-    c.erase(9, 9 == c.size()-1);
+    c.erase(9);
 
     CHECK_EQUAL(9, c.size());
 
-    CHECK_EQUAL("ccc",  c.get(0));
-    CHECK_EQUAL("bb",   c.get(1));
-    CHECK_EQUAL("a",    c.get(2));
-    CHECK_EQUAL("",     c.get(3));
-    CHECK_EQUAL("xx",   c.get(4));
+    CHECK_EQUAL("ccc", c.get(0));
+    CHECK_EQUAL("bb", c.get(1));
+    CHECK_EQUAL("a", c.get(2));
+    CHECK_EQUAL("", c.get(3));
+    CHECK_EQUAL("xx", c.get(4));
     CHECK_EQUAL("dddd", c.get(5));
     CHECK_EQUAL("eeeeeeee", c.get(6));
     CHECK_EQUAL("ffffffffffffffff", c.get(7));
@@ -252,14 +289,14 @@ TEST(ColumnString_Basic)
     // TEST(ColumnString_Delete2)
 
     // Delete from top
-    c.erase(0, 0 == c.size()-1);
+    c.erase(0);
 
     CHECK_EQUAL(8, c.size());
 
-    CHECK_EQUAL("bb",   c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("",     c.get(2));
-    CHECK_EQUAL("xx",   c.get(3));
+    CHECK_EQUAL("bb", c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("", c.get(2));
+    CHECK_EQUAL("xx", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL("eeeeeeee", c.get(5));
     CHECK_EQUAL("ffffffffffffffff", c.get(6));
@@ -269,13 +306,13 @@ TEST(ColumnString_Basic)
     // TEST(ColumnString_Delete3)
 
     // Delete from middle
-    c.erase(3, 3 == c.size()-1);
+    c.erase(3);
 
     CHECK_EQUAL(7, c.size());
 
-    CHECK_EQUAL("bb",   c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("",     c.get(2));
+    CHECK_EQUAL("bb", c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("", c.get(2));
     CHECK_EQUAL("dddd", c.get(3));
     CHECK_EQUAL("eeeeeeee", c.get(4));
     CHECK_EQUAL("ffffffffffffffff", c.get(5));
@@ -285,19 +322,19 @@ TEST(ColumnString_Basic)
     // TEST(ColumnString_DeleteAll)
 
     // Delete all items one at a time
-    c.erase(0, 0 == c.size()-1);
+    c.erase(0);
     CHECK_EQUAL(6, c.size());
-    c.erase(0, 0 == c.size()-1);
+    c.erase(0);
     CHECK_EQUAL(5, c.size());
-    c.erase(0, 0 == c.size()-1);
+    c.erase(0);
     CHECK_EQUAL(4, c.size());
-    c.erase(0, 0 == c.size()-1);
+    c.erase(0);
     CHECK_EQUAL(3, c.size());
-    c.erase(0, 0 == c.size()-1);
+    c.erase(0);
     CHECK_EQUAL(2, c.size());
-    c.erase(0, 0 == c.size()-1);
+    c.erase(0);
     CHECK_EQUAL(1, c.size());
-    c.erase(0, 0 == c.size()-1);
+    c.erase(0);
     CHECK_EQUAL(0, c.size());
 
     CHECK(c.is_empty());
@@ -316,10 +353,10 @@ TEST(ColumnString_Basic)
     c.insert(0, "xxxxx");
 
     CHECK_EQUAL("xxxxx", c.get(0));
-    CHECK_EQUAL("a",     c.get(1));
-    CHECK_EQUAL("b",     c.get(2));
-    CHECK_EQUAL("c",     c.get(3));
-    CHECK_EQUAL("d",     c.get(4));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("b", c.get(2));
+    CHECK_EQUAL("c", c.get(3));
+    CHECK_EQUAL("d", c.get(4));
     CHECK_EQUAL(5, c.size());
 
 
@@ -329,11 +366,11 @@ TEST(ColumnString_Basic)
     c.insert(3, "xxxxxxxxxx");
 
     CHECK_EQUAL("xxxxx", c.get(0));
-    CHECK_EQUAL("a",     c.get(1));
-    CHECK_EQUAL("b",     c.get(2));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("b", c.get(2));
     CHECK_EQUAL("xxxxxxxxxx", c.get(3));
-    CHECK_EQUAL("c",     c.get(4));
-    CHECK_EQUAL("d",     c.get(5));
+    CHECK_EQUAL("c", c.get(4));
+    CHECK_EQUAL("d", c.get(5));
     CHECK_EQUAL(6, c.size());
 
 
@@ -344,9 +381,6 @@ TEST(ColumnString_Basic)
     c.clear();
 
     {
-        ref_type col_ref = Column::create(Allocator::get_default());
-        Column col(Allocator::get_default(), col_ref);
-
         c.add("foobar");
         c.add("bar abc");
         c.add("baz");
@@ -357,8 +391,6 @@ TEST(ColumnString_Basic)
         CHECK_EQUAL("foobar", c.get(0));
         CHECK_EQUAL("40 chars  40 chars  40 chars  40 chars  ", c.get(1));
         CHECK_EQUAL("baz", c.get(2));
-
-        col.destroy();
     }
 
 
@@ -369,9 +401,6 @@ TEST(ColumnString_Basic)
     c.clear();
 
     {
-        ref_type col_ref = Column::create(Allocator::get_default());
-        Column col(Allocator::get_default(), col_ref);
-
         c.add("foobar");
         c.add("bar abc");
         c.add("baz");
@@ -380,11 +409,8 @@ TEST(ColumnString_Basic)
 
         CHECK_EQUAL(c.size(), c.size());
         CHECK_EQUAL("foobar", c.get(0));
-        CHECK_EQUAL("70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  ",
-                    c.get(1));
+        CHECK_EQUAL("70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  ", c.get(1));
         CHECK_EQUAL("baz", c.get(2));
-
-        col.destroy();
     }
 
 
@@ -395,8 +421,8 @@ TEST(ColumnString_Basic)
     c.clear();
 
     {
-        ref_type col_ref = Column::create(Allocator::get_default());
-        Column col(Allocator::get_default(), col_ref);
+        ref_type col_ref = IntegerColumn::create(Allocator::get_default());
+        IntegerColumn col(Allocator::get_default(), col_ref);
 
         c.add("40 chars  40 chars  40 chars  40 chars  ");
         c.add("baz");
@@ -416,8 +442,8 @@ TEST(ColumnString_Basic)
     c.clear();
 
     {
-        ref_type col_ref = Column::create(Allocator::get_default());
-        Column col(Allocator::get_default(), col_ref);
+        ref_type col_ref = IntegerColumn::create(Allocator::get_default());
+        IntegerColumn col(Allocator::get_default(), col_ref);
 
         c.add("70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  ");
         c.add("baz");
@@ -430,18 +456,13 @@ TEST(ColumnString_Basic)
 
         col.destroy();
     }
-
-
-    // TEST(ColumnString_Destroy)
-
-    c.destroy();
 }
 
 
-TEST(ColumnString_Find1)
+TEST_TYPES(ColumnString_Find1, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    ref_type ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn c(Allocator::get_default(), ref);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& c = test_resources.get_column();
 
     c.add("a");
     c.add("bc");
@@ -457,15 +478,12 @@ TEST(ColumnString_Find1)
 
     size_t res3 = c.find_first("klmop");
     CHECK_EQUAL(4, res3);
-
-    // Cleanup
-    c.destroy();
 }
 
-TEST(ColumnString_Find2)
+TEST_TYPES(ColumnString_Find2, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    ref_type ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn c(Allocator::get_default(), ref);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& c = test_resources.get_column();
 
     c.add("a");
     c.add("bc");
@@ -487,15 +505,52 @@ TEST(ColumnString_Find2)
 
     size_t res4 = c.find_first("xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx");
     CHECK_EQUAL(5, res4);
-
-    // Cleanup
-    c.destroy();
 }
 
-TEST(ColumnString_AutoEnumerate)
+TEST_TYPES(ColumnString_UpperLowerBounds1, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    ref_type ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn c(Allocator::get_default(), ref);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& c = test_resources.get_column();
+
+    c.add("a");
+    c.add("bc");
+    c.add("def");
+    c.add("ghij");
+    c.add("klmop");
+
+    CHECK_EQUAL(c.lower_bound_string("baboo"), 1);
+    CHECK_EQUAL(c.upper_bound_string("baboo"), 1);
+}
+
+TEST_TYPES(ColumnString_UpperLowerBounds2, string_column, nullable_string_column, enum_column, nullable_enum_column)
+{
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& c = test_resources.get_column();
+
+    c.add("a");
+    c.add("bc");
+    c.add("def");
+    c.add("ghij");
+    c.add("klmop");
+
+    CHECK_EQUAL(c.lower_bound_string("baboo"), 1);
+    CHECK_EQUAL(c.upper_bound_string("baboo"), 1);
+    // Medium size
+    c.add("mnbvcxzlkjhgfdsa");
+    CHECK_EQUAL(c.lower_bound_string("def"), 2);
+    CHECK_EQUAL(c.upper_bound_string("def"), 3);
+    // Big size
+    c.add("qwertyuio qwertyuio qwertyuio qwertyuio qwertyuio qwertyuio qwertyuio ");
+    CHECK_EQUAL(c.upper_bound_string("oops"), 6);
+}
+
+TEST_TYPES(ColumnString_AutoEnumerate, non_nullable, nullable)
+{
+    constexpr bool nullable = TEST_TYPE::value;
+
+    ref_type ref = StringColumn::create(Allocator::get_default());
+    StringColumn c(Allocator::get_default(), ref, nullable);
+    CHECK_EQUAL(c.is_nullable(), nullable);
 
     // Add duplicate values
     for (size_t i = 0; i < 5; ++i) {
@@ -511,7 +566,7 @@ TEST(ColumnString_AutoEnumerate)
     ref_type values;
     bool res = c.auto_enumerate(keys, values);
     CHECK(res);
-    ColumnStringEnum e(Allocator::get_default(), values, keys);
+    StringEnumColumn e(Allocator::get_default(), values, keys, nullable);
 
     // Verify that all entries match source
     CHECK_EQUAL(c.size(), e.size());
@@ -529,18 +584,23 @@ TEST(ColumnString_AutoEnumerate)
     size_t res2 = e.find_first("klmop");
     CHECK_EQUAL(4, res2);
 
+    if (nullable) {
+        e.set_null(0);
+        CHECK(e.is_null(0));
+    }
+
     // Cleanup
     c.destroy();
     e.destroy();
 }
 
 
-#if !defined DISABLE_INDEX
-
-TEST(ColumnString_AutoEnumerateIndex)
+TEST_TYPES(ColumnString_AutoEnumerateIndex, non_nullable, nullable)
 {
-    ref_type ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn c(Allocator::get_default(), ref);
+    constexpr bool nullable = TEST_TYPE::value;
+
+    ref_type ref = StringColumn::create(Allocator::get_default());
+    StringColumn c(Allocator::get_default(), ref, nullable);
 
     // Add duplicate values
     for (size_t i = 0; i < 5; ++i) {
@@ -556,7 +616,7 @@ TEST(ColumnString_AutoEnumerateIndex)
     ref_type values;
     bool res = c.auto_enumerate(keys, values);
     CHECK(res);
-    ColumnStringEnum e(Allocator::get_default(), values, keys);
+    StringEnumColumn e(Allocator::get_default(), values, keys, false);
 
     // Set index
     e.create_search_index();
@@ -566,8 +626,8 @@ TEST(ColumnString_AutoEnumerateIndex)
     size_t res1 = e.find_first("nonexist");
     CHECK_EQUAL(not_found, res1);
 
-    ref_type results_ref = Column::create(Allocator::get_default());
-    Column results(Allocator::get_default(), results_ref);
+    ref_type results_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn results(Allocator::get_default(), results_ref);
     e.find_all(results, "nonexist");
     CHECK(results.is_empty());
 
@@ -582,6 +642,24 @@ TEST(ColumnString_AutoEnumerateIndex)
     CHECK_EQUAL(14, results.get(2));
     CHECK_EQUAL(19, results.get(3));
     CHECK_EQUAL(24, results.get(4));
+
+    results.clear();
+    e.find_all(results, "a");
+    CHECK_EQUAL(5, results.size());
+    CHECK_EQUAL(0, results.get(0));
+    CHECK_EQUAL(5, results.get(1));
+    CHECK_EQUAL(10, results.get(2));
+    CHECK_EQUAL(15, results.get(3));
+    CHECK_EQUAL(20, results.get(4));
+
+    results.clear();
+    e.find_all(results, "bc");
+    CHECK_EQUAL(5, results.size());
+    CHECK_EQUAL(1, results.get(0));
+    CHECK_EQUAL(6, results.get(1));
+    CHECK_EQUAL(11, results.get(2));
+    CHECK_EQUAL(16, results.get(3));
+    CHECK_EQUAL(21, results.get(4));
 
     // Set a value
     e.set(1, "newval");
@@ -602,9 +680,14 @@ TEST(ColumnString_AutoEnumerateIndex)
     size_t res6 = e.count("newval");
     CHECK_EQUAL(2, res6);
 
+    // Append a value
+    e.add("lastval");
+    auto last_val = e.get(e.size() - 1);
+    CHECK_EQUAL("lastval", last_val);
+
     // Delete values
-    e.erase(1, 1 == e.size()-1);
-    e.erase(0, 0 == e.size()-1);
+    e.erase(1);
+    e.erase(0);
     size_t res7 = e.count("a");
     size_t res8 = e.count("newval");
     CHECK_EQUAL(4, res7);
@@ -621,10 +704,12 @@ TEST(ColumnString_AutoEnumerateIndex)
     results.destroy();
 }
 
-TEST(ColumnString_AutoEnumerateIndexReuse)
+TEST_TYPES(ColumnString_AutoEnumerateIndexReuse, non_nullable, nullable)
 {
-    ref_type ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn c(Allocator::get_default(), ref);
+    constexpr bool nullable = TEST_TYPE::value;
+
+    ref_type ref = StringColumn::create(Allocator::get_default());
+    StringColumn c(Allocator::get_default(), ref, nullable);
 
     // Add duplicate values
     for (size_t i = 0; i < 5; ++i) {
@@ -644,11 +729,10 @@ TEST(ColumnString_AutoEnumerateIndexReuse)
     ref_type values;
     bool res = c.auto_enumerate(keys, values);
     CHECK(res);
-    ColumnStringEnum e(Allocator::get_default(), values, keys);
+    StringEnumColumn e(Allocator::get_default(), values, keys, false);
 
     // Reuse the index from original column
-    StringIndex* index = c.release_search_index();
-    e.install_search_index(index);
+    e.install_search_index(c.release_search_index());
     CHECK(e.has_search_index());
 
     // Search for a value that does not exist
@@ -664,16 +748,218 @@ TEST(ColumnString_AutoEnumerateIndexReuse)
     e.destroy();
 }
 
-#endif // !defined DISABLE_INDEX
 
-
-TEST(ColumnString_FindAllExpand)
+TEST(StringEnumColumn_CloneDeep)
 {
-    ref_type asc_ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn asc(Allocator::get_default(), asc_ref);
+    ref_type ref = StringColumn::create(Allocator::get_default());
+    StringColumn o(Allocator::get_default(), ref, false);
 
-    ref_type col_ref = Column::create(Allocator::get_default());
-    Column c(Allocator::get_default(), col_ref);
+    o.add("black");
+    o.add("white");
+    o.add("grey");
+    o.add("white");
+    o.add("black");
+    o.add("black");
+
+    // Create StringEnum
+    ref_type keys;
+    ref_type values;
+    bool res = o.auto_enumerate(keys, values);
+    CHECK(res);
+    StringEnumColumn e(Allocator::get_default(), values, keys, false);
+
+    auto new_ref = e.clone_deep(Allocator::get_default());
+    StringColumn c(Allocator::get_default(), new_ref.get_ref(), false);
+
+    // Verify that all entries match source
+    CHECK_EQUAL(o.size(), e.size());
+    for (size_t i = 0; i < o.size(); ++i) {
+        StringData s1 = o.get(i);
+        StringData s2 = c.get(i);
+        CHECK_EQUAL(s1, s2);
+    }
+
+    o.destroy();
+    e.destroy();
+    c.destroy();
+}
+
+// First test if width expansion (nulls->empty string, nulls->non-empty string, empty string->non-empty string, etc)
+// works. Then do a fuzzy test at the end.
+TEST_TYPES(ColumnString_Null, nullable_string_column, nullable_enum_column)
+{
+    {
+        TEST_TYPE test_resources;
+        typename TEST_TYPE::ColumnTestType& a = test_resources.get_column();
+
+        a.add("");
+        size_t t = a.find_first("");
+        CHECK_EQUAL(t, 0);
+    }
+
+    {
+        TEST_TYPE test_resources;
+        typename TEST_TYPE::ColumnTestType& a = test_resources.get_column();
+
+        a.add("foo");
+        a.add("");
+        a.add(realm::null());
+
+        CHECK_EQUAL(a.is_null(0), false);
+        CHECK_EQUAL(a.is_null(1), false);
+        CHECK_EQUAL(a.is_null(2), true);
+        CHECK(a.get(0) == "foo");
+
+        // Test set
+        a.set_null(0);
+        a.set_null(1);
+        a.set_null(2);
+        CHECK_EQUAL(a.is_null(1), true);
+        CHECK_EQUAL(a.is_null(0), true);
+        CHECK_EQUAL(a.is_null(2), true);
+    }
+
+    {
+        TEST_TYPE test_resources;
+        typename TEST_TYPE::ColumnTestType& a = test_resources.get_column();
+
+        a.add(realm::null());
+        a.add("");
+        a.add("foo");
+
+        CHECK_EQUAL(a.is_null(0), true);
+        CHECK_EQUAL(a.is_null(1), false);
+        CHECK_EQUAL(a.is_null(2), false);
+        CHECK(a.get(2) == "foo");
+
+        // Test insert
+        a.insert(0, realm::null());
+        a.insert(2, realm::null());
+        a.insert(4, realm::null());
+
+        CHECK_EQUAL(a.is_null(0), true);
+        CHECK_EQUAL(a.is_null(1), true);
+        CHECK_EQUAL(a.is_null(2), true);
+        CHECK_EQUAL(a.is_null(3), false);
+        CHECK_EQUAL(a.is_null(4), true);
+        CHECK_EQUAL(a.is_null(5), false);
+    }
+
+    {
+        TEST_TYPE test_resources;
+        typename TEST_TYPE::ColumnTestType& a = test_resources.get_column();
+
+        a.add("");
+        a.add(realm::null());
+        a.add("foo");
+
+        CHECK_EQUAL(a.is_null(0), false);
+        CHECK_EQUAL(a.is_null(1), true);
+        CHECK_EQUAL(a.is_null(2), false);
+        CHECK(a.get(2) == "foo");
+
+        a.erase(0);
+        CHECK_EQUAL(a.is_null(0), true);
+        CHECK_EQUAL(a.is_null(1), false);
+
+        a.erase(0);
+        CHECK_EQUAL(a.is_null(0), false);
+    }
+
+    Random random(random_int<unsigned long>());
+
+    for (size_t t = 0; t < 50; t++) {
+        TEST_TYPE test_resources;
+        typename TEST_TYPE::ColumnTestType& a = test_resources.get_column();
+
+        // vector that is kept in sync with the ArrayString so that we can compare with it
+        std::vector<std::string> v;
+
+        // ArrayString capacity starts at 128 bytes, so we need lots of elements
+        // to test if relocation works
+        for (size_t i = 0; i < 100; i++) {
+            unsigned char rnd = static_cast<unsigned char>(
+                random.draw_int<unsigned int>()); //    = 1234 * ((i + 123) * (t + 432) + 423) + 543;
+
+            // Add more often than removing, so that we grow
+            if (rnd < 80 && a.size() > 0) {
+                size_t del = rnd % a.size();
+                a.erase(del);
+                v.erase(v.begin() + del);
+            }
+            else {
+                // Generate string with good probability of being empty or realm::null()
+                static const char str[] =
+                    "This string must be longer than 64 bytes in order to test the BinaryBlob type of strings";
+                size_t len;
+
+                if (random.draw_int<int>() > 100)
+                    len = rnd % sizeof(str);
+                else
+                    len = 0;
+
+                StringData sd;
+                std::string stdstr;
+
+                if (random.draw_int<int>() > 100) {
+                    sd = realm::null();
+                    stdstr = "null";
+                }
+                else {
+                    sd = StringData(str, len);
+                    stdstr = std::string(str, len);
+                }
+
+                if (random.draw_int<int>() > 100) {
+                    a.add(sd);
+                    v.push_back(stdstr);
+                }
+                else if (a.size() > 0) {
+                    size_t pos = rnd % a.size();
+                    a.insert(pos, sd);
+                    v.insert(v.begin() + pos, stdstr);
+                }
+
+                CHECK_EQUAL(a.size(), v.size());
+                for (size_t a_i = 0; a_i < a.size(); a_i++) {
+                    if (v[a_i] == "null") {
+                        CHECK(a.is_null(a_i));
+                        CHECK(a.get(a_i).data() == nullptr);
+                    }
+                    else {
+                        CHECK(a.get(a_i) == v[a_i]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(ColumnString_SetNullThrowsUnlessNullable)
+{
+    ref_type ref = StringColumn::create(Allocator::get_default());
+    StringColumn c(Allocator::get_default(), ref, false);
+    c.add("Hello, World!");
+    CHECK_LOGIC_ERROR(c.set_null(0), LogicError::column_not_nullable);
+
+    size_t keys, values;
+    bool res = c.auto_enumerate(keys, values, true);
+    CHECK(res);
+    StringEnumColumn enum_column{Allocator::get_default(), values, keys, false};
+    CHECK_LOGIC_ERROR(enum_column.set_null(0), LogicError::column_not_nullable);
+
+    c.destroy();
+    enum_column.destroy();
+}
+
+
+TEST_TYPES(ColumnString_FindAllExpand, string_column, nullable_string_column, enum_column, nullable_enum_column)
+{
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& asc = test_resources.get_column();
+
+    ref_type col_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn c(Allocator::get_default(), col_ref);
 
     asc.add("HEJ");
     asc.add("sdfsd");
@@ -694,7 +980,8 @@ TEST(ColumnString_FindAllExpand)
     asc.add("HEJ");
     asc.add("dfsdfsdkfjds gfsdfsdfsdkfjds gfsdfsdfsdkfjds gfsdfsdfsdkfjds gfsdfsdfsdkfjds gfsdfsdfsdkfjds gfs");
     asc.add("HEJ");
-    asc.add("dfsdfsdkfjds gfsdfsdfsdkfjds gfsdfsdfsdkfjds gfsdfsdfsdkfjds gfsdfsdfsdkfjds gfsdfsdfsdkfjds gfgdfg djf gjkfdghkfds");
+    asc.add("dfsdfsdkfjds gfsdfsdfsdkfjds gfsdfsdfsdkfjds gfsdfsdfsdkfjds gfsdfsdfsdkfjds gfsdfsdfsdkfjds gfgdfg djf "
+            "gjkfdghkfds");
 
     // Todo, should the API behaviour really require us to clear c manually?
     c.clear();
@@ -708,21 +995,19 @@ TEST(ColumnString_FindAllExpand)
     CHECK_EQUAL(6, c.get(3));
     CHECK_EQUAL(8, c.get(4));
 
-    asc.destroy();
     c.destroy();
-
 }
 
 // FindAll using ranges, when expanded ArrayStringLong
-TEST(ColumnString_FindAllRangesLong)
+TEST_TYPES(ColumnString_FindAllRangesLong, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    ref_type asc_ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn asc(Allocator::get_default(), asc_ref);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& asc = test_resources.get_column();
 
-    ref_type col_ref = Column::create(Allocator::get_default());
-    Column c(Allocator::get_default(), col_ref);
+    ref_type col_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn c(Allocator::get_default(), col_ref);
 
-    // 17 elements, to test node splits with TIGHTDB_MAX_BPNODE_SIZE = 3 or other small number
+    // 17 elements, to test node splits with REALM_MAX_BPNODE_SIZE = 3 or other small number
     asc.add("HEJSA"); // 0
     asc.add("70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  70 chars  ");
     asc.add("HEJSA");
@@ -766,20 +1051,19 @@ TEST(ColumnString_FindAllRangesLong)
     CHECK_EQUAL(14, c.get(6));
 
     // Clean-up
-    asc.destroy();
     c.destroy();
 }
 
 // FindAll using ranges, when not expanded (using ArrayString)
-TEST(ColumnString_FindAllRanges)
+TEST_TYPES(ColumnString_FindAllRanges, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    ref_type asc_ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn asc(Allocator::get_default(), asc_ref);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& asc = test_resources.get_column();
 
-    ref_type col_ref = Column::create(Allocator::get_default());
-    Column c(Allocator::get_default(), col_ref);
+    ref_type col_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn c(Allocator::get_default(), col_ref);
 
-    // 17 elements, to test node splits with TIGHTDB_MAX_BPNODE_SIZE = 3 or other small number
+    // 17 elements, to test node splits with REALM_MAX_BPNODE_SIZE = 3 or other small number
     asc.add("HEJSA"); // 0
     asc.add("1");
     asc.add("HEJSA");
@@ -823,15 +1107,13 @@ TEST(ColumnString_FindAllRanges)
     CHECK_EQUAL(14, c.get(6));
 
     // Clean-up
-    asc.destroy();
     c.destroy();
 }
 
-TEST(ColumnString_FindAll_NoDuplicatesWithIndex)
+TEST_TYPES(ColumnString_FindAll_NoDuplicatesWithIndex, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    // Create column *without* duplicate values.
-    ref_type ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn col(Allocator::get_default(), ref);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add("a");
     col.add("b");
@@ -840,23 +1122,24 @@ TEST(ColumnString_FindAll_NoDuplicatesWithIndex)
 
     col.create_search_index();
 
-    ref_type col_ref = Column::create(Allocator::get_default());
-    Column res(Allocator::get_default(), col_ref);
+    ref_type col_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn res(Allocator::get_default(), col_ref);
     col.find_all(res, "a", 0, npos);
 
     CHECK_EQUAL(1, res.size());
 
     // Clean-up
     res.destroy();
-    col.destroy();
 }
 
-TEST(ColumnString_Count)
+TEST_TYPES(ColumnString_Count, non_nullable, nullable)
 {
-    ref_type asc_ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn asc(Allocator::get_default(), asc_ref);
+    constexpr bool nullable = TEST_TYPE::value;
 
-    // 17 elements, to test node splits with TIGHTDB_MAX_BPNODE_SIZE = 3 or other small number
+    ref_type asc_ref = StringColumn::create(Allocator::get_default());
+    StringColumn asc(Allocator::get_default(), asc_ref, nullable);
+
+    // 17 elements, to test node splits with REALM_MAX_BPNODE_SIZE = 3 or other small number
     asc.add("HEJSA"); // 0
     asc.add("1");
     asc.add("HEJSA");
@@ -881,7 +1164,7 @@ TEST(ColumnString_Count)
     size_t keys;
     size_t values;
     CHECK(asc.auto_enumerate(keys, values));
-    ColumnStringEnum e(Allocator::get_default(), values, keys);
+    StringEnumColumn e(Allocator::get_default(), values, keys, false);
 
     // Check that enumerated column return same result
     CHECK_EQUAL(9, e.count("HEJSA"));
@@ -891,15 +1174,128 @@ TEST(ColumnString_Count)
     e.destroy();
 }
 
-
-#if !defined DISABLE_INDEX
-
-TEST(ColumnString_Index)
+TEST_TYPES(ColumnString_SetIndexInParent, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    ref_type asc_ref = AdaptiveStringColumn::create(Allocator::get_default());
-    AdaptiveStringColumn asc(Allocator::get_default(), asc_ref);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& sc = test_resources.get_column();
 
-    // 17 elements, to test node splits with TIGHTDB_MAX_BPNODE_SIZE = 3 or other small number
+    StringIndex* ndx = sc.create_search_index();
+    CHECK(ndx != nullptr);
+    sc.set_ndx_in_parent(0);
+    CHECK_EQUAL(sc.get_ndx_in_parent() + 1, ndx->get_ndx_in_parent());
+}
+
+TEST_TYPES(ColumnString_SwapRows, string_column, nullable_string_column, enum_column, nullable_enum_column)
+{
+    // Normal case
+    {
+        TEST_TYPE test_resources;
+        typename TEST_TYPE::ColumnTestType& c = test_resources.get_column();
+
+        c.add("a");
+        c.add("b");
+        c.add("c");
+        c.add("d");
+
+        CHECK_EQUAL(c.get(1), "b");
+        CHECK_EQUAL(c.get(2), "c");
+        CHECK_EQUAL(c.size(), 4); // size should not change
+
+        c.swap_rows(1, 2);
+
+        CHECK_EQUAL(c.get(1), "c");
+        CHECK_EQUAL(c.get(2), "b");
+        CHECK_EQUAL(c.size(), 4);
+    }
+
+    // First two elements
+    {
+        TEST_TYPE test_resources;
+        typename TEST_TYPE::ColumnTestType& c = test_resources.get_column();
+
+        c.add("a");
+        c.add("b");
+        c.add("c");
+
+        c.swap_rows(0, 1);
+
+        CHECK_EQUAL(c.get(0), "b");
+        CHECK_EQUAL(c.get(1), "a");
+        CHECK_EQUAL(c.size(), 3); // size should not change
+    }
+
+    // Last two elements
+    {
+        TEST_TYPE test_resources;
+        typename TEST_TYPE::ColumnTestType& c = test_resources.get_column();
+
+        c.add("a");
+        c.add("b");
+        c.add("c");
+
+        c.swap_rows(1, 2);
+
+        CHECK_EQUAL(c.get(1), "c");
+        CHECK_EQUAL(c.get(2), "b");
+        CHECK_EQUAL(c.size(), 3); // size should not change
+    }
+
+    // Indices in wrong order
+    {
+        TEST_TYPE test_resources;
+        typename TEST_TYPE::ColumnTestType& c = test_resources.get_column();
+
+        c.add("a");
+        c.add("b");
+        c.add("c");
+
+        c.swap_rows(2, 1);
+
+        CHECK_EQUAL(c.get(1), "c");
+        CHECK_EQUAL(c.get(2), "b");
+        CHECK_EQUAL(c.size(), 3); // size should not change
+    }
+
+    // Column with duplicate values
+    {
+        TEST_TYPE test_resources;
+        typename TEST_TYPE::ColumnTestType& c = test_resources.get_column();
+
+        c.add("a");
+        c.add("a");
+        c.add("c");
+
+        c.swap_rows(0, 1);
+
+        CHECK_EQUAL(c.get(0), "a");
+        CHECK_EQUAL(c.get(1), "a");
+    }
+
+    // Null values
+    if (TEST_TYPE::is_nullable()) {
+        TEST_TYPE test_resources;
+        typename TEST_TYPE::ColumnTestType& c = test_resources.get_column();
+
+        c.add("a");
+        c.add("b");
+        c.add(realm::null());
+
+        CHECK(c.get(2).is_null()); // passes
+
+        c.swap_rows(1, 2);
+
+        CHECK(c.get(1).is_null());  // fails
+        CHECK_EQUAL(c.get(2), "b"); // passes
+    }
+}
+
+
+TEST_TYPES(ColumnString_Index, string_column, nullable_string_column, enum_column, nullable_enum_column)
+{
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& asc = test_resources.get_column();
+
+    // 17 elements, to test node splits with REALM_MAX_BPNODE_SIZE = 3 or other small number
     asc.add("HEJSA"); // 0
     asc.add("1");
     asc.add("HEJSA");
@@ -920,7 +1316,7 @@ TEST(ColumnString_Index)
 
     const StringIndex& ndx = *asc.create_search_index();
     CHECK(asc.has_search_index());
-#ifdef TIGHTDB_DEBUG
+#ifdef REALM_DEBUG
     ndx.verify_entries(asc);
 #else
     static_cast<void>(ndx);
@@ -968,9 +1364,9 @@ TEST(ColumnString_Index)
     CHECK_EQUAL(19, ins3);
 
     // Delete some values
-    asc.erase(0,  0  == asc.size()-1);  // top
-    asc.erase(7,  7  == asc.size()-1);  // middle
-    asc.erase(17, 17 == asc.size()-1); // bottom
+    asc.erase(0);  // top
+    asc.erase(7);  // middle
+    asc.erase(17); // bottom
     size_t del1 = asc.find_first("top");
     size_t del2 = asc.find_first("middle");
     size_t del3 = asc.find_first("bottom");
@@ -988,11 +1384,158 @@ TEST(ColumnString_Index)
     size_t c2 = asc.find_first("fifteen");
     CHECK_EQUAL(not_found, c1);
     CHECK_EQUAL(not_found, c2);
-
-    // Clean-up
-    asc.destroy();
 }
 
-#endif // !defined DISABLE_INDEX
+
+/**
+ * This test ensures that StringColumn::EraseLeafElem is called. It is called when you
+ * have some leaves.
+ */
+TEST(ColumnString_NonLeafRoot)
+{
+    // Small strings
+    {
+        ref_type ref = StringColumn::create(Allocator::get_default());
+        StringColumn c(Allocator::get_default(), ref);
+
+        for (int i = 0; i < (REALM_MAX_BPNODE_SIZE + 2); i++) {
+            std::string s = util::to_string(i);
+            c.add(s);
+        }
+
+        CHECK_EQUAL(c.count("3"), 1);
+        CHECK_EQUAL(c.find_first("3"), 3);
+        CHECK_EQUAL(c.find_first("5000"), not_found);
+        auto mid_point = util::to_string(REALM_MAX_BPNODE_SIZE / 2);
+        CHECK_EQUAL(c.upper_bound_string(mid_point), REALM_MAX_BPNODE_SIZE / 2 + 1);
+
+        ref_type col_ref = IntegerColumn::create(Allocator::get_default());
+        IntegerColumn col(Allocator::get_default(), col_ref);
+        c.find_all(col, "3");
+        CHECK_EQUAL(col.size(), 1);
+        CHECK_EQUAL(col.get(0), 3);
+        col.destroy();
+
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE), util::to_string(REALM_MAX_BPNODE_SIZE));
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE + 1), util::to_string(REALM_MAX_BPNODE_SIZE + 1));
+        c.erase(REALM_MAX_BPNODE_SIZE);
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE), util::to_string(REALM_MAX_BPNODE_SIZE + 1));
+        c.erase(REALM_MAX_BPNODE_SIZE);
+        CHECK_EQUAL(c.size(), REALM_MAX_BPNODE_SIZE);
+
+        c.destroy();
+    }
+    // Medium strings
+    {
+        ref_type ref = StringColumn::create(Allocator::get_default());
+        StringColumn c(Allocator::get_default(), ref);
+
+        c.add("This is a medium long string");
+        for (int i = 1; i < (REALM_MAX_BPNODE_SIZE + 2); i++) {
+            std::string s = util::to_string(i);
+            c.add(s);
+        }
+
+        CHECK_EQUAL(c.count("3"), 1);
+        CHECK_EQUAL(c.find_first("3"), 3);
+
+        ref_type col_ref = IntegerColumn::create(Allocator::get_default());
+        IntegerColumn col(Allocator::get_default(), col_ref);
+        c.find_all(col, "3");
+        CHECK_EQUAL(col.size(), 1);
+        CHECK_EQUAL(col.get(0), 3);
+        col.destroy();
+
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE), util::to_string(REALM_MAX_BPNODE_SIZE));
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE + 1), util::to_string(REALM_MAX_BPNODE_SIZE + 1));
+        c.erase(REALM_MAX_BPNODE_SIZE);
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE), util::to_string(REALM_MAX_BPNODE_SIZE + 1));
+        c.erase(REALM_MAX_BPNODE_SIZE);
+        CHECK_EQUAL(c.size(), REALM_MAX_BPNODE_SIZE);
+
+        c.destroy();
+    }
+    // Big strings
+    {
+        ref_type ref = StringColumn::create(Allocator::get_default());
+        StringColumn c(Allocator::get_default(), ref);
+
+        c.add("This is a rather long string, that should not be very much shorter");
+        for (int i = 1; i < (REALM_MAX_BPNODE_SIZE + 2); i++) {
+            std::string s = util::to_string(i);
+            c.add(s);
+        }
+
+        CHECK_EQUAL(c.count("3"), 1);
+        CHECK_EQUAL(c.find_first("3"), 3);
+
+        ref_type col_ref = IntegerColumn::create(Allocator::get_default());
+        IntegerColumn col(Allocator::get_default(), col_ref);
+        c.find_all(col, "3");
+        CHECK_EQUAL(col.size(), 1);
+        CHECK_EQUAL(col.get(0), 3);
+        col.destroy();
+
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE), util::to_string(REALM_MAX_BPNODE_SIZE));
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE + 1), util::to_string(REALM_MAX_BPNODE_SIZE + 1));
+        c.erase(REALM_MAX_BPNODE_SIZE);
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE), util::to_string(REALM_MAX_BPNODE_SIZE + 1));
+        c.erase(REALM_MAX_BPNODE_SIZE);
+        CHECK_EQUAL(c.size(), REALM_MAX_BPNODE_SIZE);
+
+        c.destroy();
+    }
+    // Upgrade leaf from medium to big
+    {
+        ref_type ref = StringColumn::create(Allocator::get_default());
+        StringColumn c(Allocator::get_default(), ref);
+
+        for (int i = 0; i < (REALM_MAX_BPNODE_SIZE + 2); i++) {
+            std::string s = util::to_string(i);
+            c.add(s);
+        }
+        c.set(REALM_MAX_BPNODE_SIZE, "This is a medium long string");
+        c.set(REALM_MAX_BPNODE_SIZE + 1, "This is a rather long string, that should not be very much shorter");
+        CHECK_EQUAL(c.get(0), "0");
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE), "This is a medium long string");
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE + 1),
+                    "This is a rather long string, that should not be very much shorter");
+
+        c.destroy();
+    }
+    // Upgrade leaf from small to big while inserting
+    {
+        ref_type ref = StringColumn::create(Allocator::get_default());
+        StringColumn c(Allocator::get_default(), ref);
+
+        for (int i = 0; i < REALM_MAX_BPNODE_SIZE + 1; i++) {
+            std::string s = util::to_string(i);
+            c.add(s);
+        }
+        c.add("This is a rather long string, that should not be very much shorter");
+
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE + 1),
+                    "This is a rather long string, that should not be very much shorter");
+
+        c.destroy();
+    }
+    // Upgrade leaf from medium to big while inserting
+    {
+        ref_type ref = StringColumn::create(Allocator::get_default());
+        StringColumn c(Allocator::get_default(), ref);
+
+        c.add("This is a medium long string");
+        for (int i = 1; i < REALM_MAX_BPNODE_SIZE + 1; i++) {
+            std::string s = util::to_string(i);
+            c.add(s);
+        }
+        c.add("This is a rather long string, that should not be very much shorter");
+
+        CHECK_EQUAL(c.get(REALM_MAX_BPNODE_SIZE + 1),
+                    "This is a rather long string, that should not be very much shorter");
+
+        c.destroy();
+    }
+}
 
 #endif // TEST_COLUMN_STRING

@@ -2,7 +2,7 @@
 #
 # run transaction benchmarks
 #
-# (C) Copyright 2012 by TightDB, Inc. <http://www.tightdb.com/>
+# (C) Copyright 2012 by Realm, Inc. <http://www.realm.com/>
 #
 PATH=/bin:/usr/bin
 
@@ -19,7 +19,7 @@ function bench {
     echo "# Duration: ${duration}" >> $out
     echo "# Readers Writers TPS(Reader) TPS(Writer) TPS(total)" >> $out
     for i in $(seq 0 $Nmax)
-    do 
+    do
         for j in $(seq 0 $Nmax)
         do
             echo -n "$j $i " >> $out
@@ -30,7 +30,7 @@ function bench {
     done
 }
 
-bench "tdb"
+bench "realm"
 bench "sqlite"
 bench "mysql"
 bench "sqlite-wal"

@@ -1,3 +1,21 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "testsettings.hpp"
 #ifdef TEST_ARRAY
 
@@ -7,16 +25,15 @@
 #include <vector>
 #include <map>
 
-#include <tightdb/array.hpp>
-#include <tightdb/column.hpp>
-#include <tightdb/query_conditions.hpp>
+#include <realm/array.hpp>
+#include <realm/column.hpp>
+#include <realm/query_conditions.hpp>
 
 #include "test.hpp"
 
-using namespace std;
-using namespace tightdb;
-using namespace tightdb::test_util;
-using unit_test::TestResults;
+using namespace realm;
+using namespace realm::test_util;
+using unit_test::TestContext;
 
 
 // Test independence and thread-safety
@@ -51,12 +68,12 @@ using unit_test::TestResults;
 
 namespace {
 
-void has_zero_byte(TestResults& test_results, int64_t value, size_t reps)
+void has_zero_byte(TestContext& test_context, int64_t value, size_t reps)
 {
     Array a(Allocator::get_default());
     a.create(Array::type_Normal);
-    ref_type column_ref = Column::create(Allocator::get_default());
-    Column r(Allocator::get_default(), column_ref);
+    ref_type column_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn r(Allocator::get_default(), column_ref);
 
     for (size_t i = 0; i < reps - 1; ++i)
         a.add(value);
@@ -297,25 +314,6 @@ TEST(Array_General)
     CHECK_EQUAL(c.get(6), 65536);
 
 
-    // TEST(Array_Index1)
-
-/*
-    // Create index
-    Column index;
-    c.BuildIndex(index);
-
-    CHECK_EQUAL(0, c.FindWithIndex(256));
-    CHECK_EQUAL(1, c.FindWithIndex(0));
-    CHECK_EQUAL(2, c.FindWithIndex(1));
-    CHECK_EQUAL(3, c.FindWithIndex(16));
-    CHECK_EQUAL(4, c.FindWithIndex(2));
-    CHECK_EQUAL(5, c.FindWithIndex(3));
-    CHECK_EQUAL(6, c.FindWithIndex(65536));
-
-    c.ClearIndex();
-*/
-
-
     // TEST(Array_Delete1)
 
     // Delete from middle
@@ -444,8 +442,8 @@ TEST(Array_General)
     CHECK_EQUAL(10, c.find_first(4294967296LL));
 
 
-// Partial find is not fully implemented yet
-/*
+    // Partial find is not fully implemented yet
+    /*
     // TEST(Array_PartialFind1)
 
     c.clear();
@@ -457,7 +455,7 @@ TEST(Array_General)
     CHECK_EQUAL(-1, c.find_first(partial_count+1, 0, partial_count));
     CHECK_EQUAL(-1, c.find_first(0, 1, partial_count));
     CHECK_EQUAL(partial_count-1, c.find_first(partial_count-1, partial_count-1, partial_count));
-*/
+    */
 
     // TEST(Array_Destroy)
 
@@ -486,22 +484,20 @@ TEST(Array_AddNeg1_1)
 }
 
 
-
-
 // Oops, see Array_LowerUpperBound
 TEST(Array_UpperLowerBound)
 {
     // Tests Array::upper_bound() and Array::lower_bound()
-    // This test is independent of TIGHTDB_MAX_BPNODE_SIZE
+    // This test is independent of REALM_MAX_BPNODE_SIZE
     Array a(Allocator::get_default());
     a.create(Array::type_Normal);
-    vector<int> v;
+    std::vector<int> v;
     Random random(random_int<unsigned long>()); // Seed from slow global generator
 
     // we use 4 as constant in order to make border case sequences of
     // v, v, v and v, v+1, v+2, etc, probable
-    for (int i=0; i< (1000 * (1 + TEST_DURATION * TEST_DURATION * TEST_DURATION *
-                              TEST_DURATION * TEST_DURATION)) ; i++) {
+    for (int i = 0; i < (1000 * (1 + TEST_DURATION * TEST_DURATION * TEST_DURATION * TEST_DURATION * TEST_DURATION));
+         i++) {
         int elements = random.draw_int_mod(64);
         int val = random.draw_int_mod(4); // random start value
 
@@ -543,6 +539,7 @@ TEST(Array_LowerUpperBound)
     a.add(70);
     a.add(80);
 
+    // clang-format off
     CHECK_EQUAL(0, a.lower_bound_int(0));  CHECK_EQUAL(0, a.upper_bound_int(0));
     CHECK_EQUAL(0, a.lower_bound_int(1));  CHECK_EQUAL(0, a.upper_bound_int(1));
     CHECK_EQUAL(0, a.lower_bound_int(9));  CHECK_EQUAL(0, a.upper_bound_int(9));
@@ -576,44 +573,11 @@ TEST(Array_LowerUpperBound)
     CHECK_EQUAL(7, a.lower_bound_int(80)); CHECK_EQUAL(8, a.upper_bound_int(80));
     CHECK_EQUAL(8, a.lower_bound_int(81)); CHECK_EQUAL(8, a.upper_bound_int(81));
     CHECK_EQUAL(8, a.lower_bound_int(82)); CHECK_EQUAL(8, a.upper_bound_int(82));
+    // clang-format on
 
     a.destroy();
 }
 
-
-TEST(Array_Sort)
-{
-    // Create Array with random values
-    Array a(Allocator::get_default());
-    a.create(Array::type_Normal);
-
-    a.add(25);
-    a.add(12);
-    a.add(50);
-    a.add(3);
-    a.add(34);
-    a.add(0);
-    a.add(17);
-    a.add(51);
-    a.add(2);
-    a.add(40);
-
-    a.sort();
-
-    CHECK_EQUAL(0, a.get(0));
-    CHECK_EQUAL(2, a.get(1));
-    CHECK_EQUAL(3, a.get(2));
-    CHECK_EQUAL(12, a.get(3));
-    CHECK_EQUAL(17, a.get(4));
-    CHECK_EQUAL(25, a.get(5));
-    CHECK_EQUAL(34, a.get(6));
-    CHECK_EQUAL(40, a.get(7));
-    CHECK_EQUAL(50, a.get(8));
-    CHECK_EQUAL(51, a.get(9));
-
-    // Cleanup
-    a.destroy();
-}
 
 /** find_all() int tests spread out over bitwidth
  *
@@ -625,22 +589,31 @@ TEST(Array_FindAllInt0)
     Array a(Allocator::get_default());
     a.create(Array::type_Normal);
 
-    ref_type column_ref = Column::create(Allocator::get_default());
-    Column r(Allocator::get_default(), column_ref);
+    ref_type column_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn r(Allocator::get_default(), column_ref);
 
     const int value = 0;
     const int vReps = 5;
 
-    for (int i = 0; i < vReps; i++){
+    for (int i = 0; i < vReps; i++) {
         a.add(0);
     }
 
+    r.clear();
+    a.find_all(&r, 1, 0, 0, 0);
+    CHECK_EQUAL(0, r.size());
+
+    r.clear();
+    a.find_all(&r, 1, 0, vReps - 1, vReps - 1);
+    CHECK_EQUAL(0, r.size());
+
+    r.clear();
     a.find_all(&r, value);
     CHECK_EQUAL(vReps, r.size());
 
     size_t i = 0;
     size_t j = 0;
-    while (i < a.size()){
+    while (i < a.size()) {
         if (a.get(i) == value)
             CHECK_EQUAL(int64_t(i), r.get(j++));
         i += 1;
@@ -656,13 +629,13 @@ TEST(Array_FindAllInt1)
     Array a(Allocator::get_default());
     a.create(Array::type_Normal);
 
-    ref_type column_ref = Column::create(Allocator::get_default());
-    Column r(Allocator::get_default(), column_ref);
+    ref_type column_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn r(Allocator::get_default(), column_ref);
 
     const int value = 1;
     const int vReps = 5;
 
-    for (int i = 0; i < vReps; i++){
+    for (int i = 0; i < vReps; i++) {
         a.add(0);
         a.add(0);
         a.add(1);
@@ -674,7 +647,7 @@ TEST(Array_FindAllInt1)
 
     size_t i = 0;
     size_t j = 0;
-    while (i < a.size()){
+    while (i < a.size()) {
         if (a.get(i) == value)
             CHECK_EQUAL(int64_t(i), r.get(j++));
         i += 1;
@@ -690,13 +663,13 @@ TEST(Array_FindAllInt2)
     Array a(Allocator::get_default());
     a.create(Array::type_Normal);
 
-    ref_type column_ref = Column::create(Allocator::get_default());
-    Column r(Allocator::get_default(), column_ref);
+    ref_type column_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn r(Allocator::get_default(), column_ref);
 
     const int value = 3;
     const int vReps = 5;
 
-    for (int i = 0; i < vReps; i++){
+    for (int i = 0; i < vReps; i++) {
         a.add(0);
         a.add(1);
         a.add(2);
@@ -708,7 +681,7 @@ TEST(Array_FindAllInt2)
 
     size_t i = 0;
     size_t j = 0;
-    while (i < a.size()){
+    while (i < a.size()) {
         if (a.get(i) == value)
             CHECK_EQUAL(int64_t(i), r.get(j++));
         i += 1;
@@ -724,13 +697,13 @@ TEST(Array_FindAllInt3)
     Array a(Allocator::get_default());
     a.create(Array::type_Normal);
 
-    ref_type column_ref = Column::create(Allocator::get_default());
-    Column r(Allocator::get_default(), column_ref);
+    ref_type column_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn r(Allocator::get_default(), column_ref);
 
     const int value = 10;
     const int vReps = 5;
     // 0, 4, 8
-    for (int i = 0; i < vReps; i++){
+    for (int i = 0; i < vReps; i++) {
         a.add(10);
         a.add(11);
         a.add(12);
@@ -742,7 +715,7 @@ TEST(Array_FindAllInt3)
 
     size_t i = 0;
     size_t j = 0;
-    while (i < a.size()){
+    while (i < a.size()) {
         if (a.get(i) == value)
             CHECK_EQUAL(int64_t(i), r.get(j++));
         i += 1;
@@ -758,13 +731,13 @@ TEST(Array_FindAllInt4)
     Array a(Allocator::get_default());
     a.create(Array::type_Normal);
 
-    ref_type column_ref = Column::create(Allocator::get_default());
-    Column r(Allocator::get_default(), column_ref);
+    ref_type column_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn r(Allocator::get_default(), column_ref);
 
     const int value = 20;
     const int vReps = 5;
 
-    for (int i = 0; i < vReps; i++){
+    for (int i = 0; i < vReps; i++) {
         // 8 bitwidth
         a.add(20);
         a.add(21);
@@ -777,7 +750,7 @@ TEST(Array_FindAllInt4)
 
     size_t i = 0;
     size_t j = 0;
-    while (i < a.size()){
+    while (i < a.size()) {
         if (a.get(i) == value)
             CHECK_EQUAL(int64_t(i), r.get(j++));
         i += 1;
@@ -793,13 +766,13 @@ TEST(Array_FindAllInt5)
     Array a(Allocator::get_default());
     a.create(Array::type_Normal);
 
-    ref_type column_ref = Column::create(Allocator::get_default());
-    Column r(Allocator::get_default(), column_ref);
+    ref_type column_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn r(Allocator::get_default(), column_ref);
 
     const int value = 303;
     const int vReps = 5;
 
-    for (int i = 0; i < vReps; i++){
+    for (int i = 0; i < vReps; i++) {
         // 16 bitwidth
         a.add(300);
         a.add(301);
@@ -812,7 +785,7 @@ TEST(Array_FindAllInt5)
 
     size_t i = 0;
     size_t j = 0;
-    while (i < a.size()){
+    while (i < a.size()) {
         if (a.get(i) == value)
             CHECK_EQUAL(int64_t(i), r.get(j++));
         i += 1;
@@ -828,8 +801,8 @@ TEST(Array_FindAllInt6)
     Array a(Allocator::get_default());
     a.create(Array::type_Normal);
 
-    ref_type column_ref = Column::create(Allocator::get_default());
-    Column r(Allocator::get_default(), column_ref);
+    ref_type column_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn r(Allocator::get_default(), column_ref);
 
     const int value = 70000;
     const int vReps = 5;
@@ -863,8 +836,8 @@ TEST(Array_FindAllInt7)
     Array a(Allocator::get_default());
     a.create(Array::type_Normal);
 
-    ref_type column_ref = Column::create(Allocator::get_default());
-    Column r(Allocator::get_default(), column_ref);
+    ref_type column_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn r(Allocator::get_default(), column_ref);
 
     const int64_t value = 4300000003ULL;
     const int vReps = 5;
@@ -893,22 +866,24 @@ TEST(Array_FindAllInt7)
     r.destroy();
 }
 
-// Tests the case where a value does *not* exist in one entire 64-bit chunk (triggers the 'if (has_zero_byte()) break;' condition)
+// Tests the case where a value does *not* exist in one entire 64-bit chunk (triggers the 'if (has_zero_byte())
+// break;' condition)
 TEST(Array_FindHasZeroByte)
 {
-    // we want at least 1 entire 64-bit chunk-test, and we also want a remainder-test, so we chose n to be a prime > 64
+    // we want at least 1 entire 64-bit chunk-test, and we also want a remainder-test, so we chose n to be a prime >
+    // 64
     size_t n = 73;
-    has_zero_byte(test_results, 1, n); // width = 1
-    has_zero_byte(test_results, 3, n); // width = 2
-    has_zero_byte(test_results, 13, n); // width = 4
-    has_zero_byte(test_results, 100, n); // 8
-    has_zero_byte(test_results, 10000, n); // 16
-    has_zero_byte(test_results, 100000, n); // 32
-    has_zero_byte(test_results, 8000000000LL, n); // 64
+    has_zero_byte(test_context, 1, n);            // width = 1
+    has_zero_byte(test_context, 3, n);            // width = 2
+    has_zero_byte(test_context, 13, n);           // width = 4
+    has_zero_byte(test_context, 100, n);          // 8
+    has_zero_byte(test_context, 10000, n);        // 16
+    has_zero_byte(test_context, 100000, n);       // 32
+    has_zero_byte(test_context, 8000000000LL, n); // 64
 }
 
-// New find test for SSE search, to trigger partial finds (see FindSSE()) before and after the aligned data area
-TEST(Array_FindSSE)
+// New find test for SSE search, to trigger partial finds (see find_sse()) before and after the aligned data area
+TEST(Array_find_sse)
 {
     Array a(Allocator::get_default());
     a.create(Array::type_Normal);
@@ -920,114 +895,13 @@ TEST(Array_FindSSE)
     for (size_t i = 0; i < 100; ++i) {
         a.set(i, 123);
         size_t t = a.find_first(123);
-        TIGHTDB_ASSERT(t == i);
+        REALM_ASSERT(t == i);
         a.set(i, 10000);
         static_cast<void>(t);
     }
     a.destroy();
 }
 
-
-TEST(Array_Sum0)
-{
-    Array a(Allocator::get_default());
-    a.create(Array::type_Normal);
-
-    for (int i = 0; i < 64 + 7; ++i) {
-        a.add(0);
-    }
-    CHECK_EQUAL(0, a.sum(0, a.size()));
-    a.destroy();
-}
-
-TEST(Array_Sum1)
-{
-    Array a(Allocator::get_default());
-    a.create(Array::type_Normal);
-
-    int64_t s1 = 0;
-    for (int i = 0; i < 256 + 7; ++i)
-        a.add(i % 2);
-
-    s1 = 0;
-    for (int i = 0; i < 256 + 7; ++i)
-        s1 += a.get(i);
-    CHECK_EQUAL(s1, a.sum(0, a.size()));
-
-    s1 = 0;
-    for (int i = 3; i < 100; ++i)
-        s1 += a.get(i);
-    CHECK_EQUAL(s1, a.sum(3, 100));
-
-    a.destroy();
-}
-
-TEST(Array_Sum2)
-{
-    Array a(Allocator::get_default());
-    a.create(Array::type_Normal);
-
-    int64_t s1 = 0;
-    for (int i = 0; i < 256 + 7; ++i)
-        a.add(i % 4);
-
-    s1 = 0;
-    for (int i = 0; i < 256 + 7; ++i)
-        s1 += a.get(i);
-    CHECK_EQUAL(s1, a.sum(0, a.size()));
-
-    s1 = 0;
-    for (int i = 3; i < 100; ++i)
-        s1 += a.get(i);
-    CHECK_EQUAL(s1, a.sum(3, 100));
-
-    a.destroy();
-}
-
-
-TEST(Array_Sum4)
-{
-    Array a(Allocator::get_default());
-    a.create(Array::type_Normal);
-
-    int64_t s1 = 0;
-    for (int i = 0; i < 256 + 7; ++i)
-        a.add(i % 16);
-
-    s1 = 0;
-    for (int i = 0; i < 256 + 7; ++i)
-        s1 += a.get(i);
-    CHECK_EQUAL(s1, a.sum(0, a.size()));
-
-    s1 = 0;
-    for (int i = 3; i < 100; ++i)
-        s1 += a.get(i);
-    CHECK_EQUAL(s1, a.sum(3, 100));
-
-    a.destroy();
-}
-
-TEST(Array_Sum16)
-{
-    Array a(Allocator::get_default());
-    a.create(Array::type_Normal);
-
-    int64_t s1 = 0;
-    for (int i = 0; i < 256 + 7; ++i)
-        a.add(i % 30000);
-
-    s1 = 0;
-    for (int i = 0; i < 256 + 7; ++i)
-        s1 += a.get(i);
-    CHECK_EQUAL(s1, a.sum(0, a.size()));
-
-    s1 = 0;
-    for (int i = 3; i < 100; ++i)
-        s1 += a.get(i);
-    CHECK_EQUAL(s1, a.sum(3, 100));
-
-    a.destroy();
-}
 
 TEST(Array_Greater)
 {
@@ -1036,16 +910,17 @@ TEST(Array_Greater)
 
     size_t items = 400;
 
-    for (items = 2; items < 200; items += 7)
-    {
+    for (items = 2; items < 200; items += 7) {
 
         a.clear();
         for (size_t i = 0; i < items; ++i) {
             a.add(0);
         }
-        size_t t = a.find_first<Greater>(0, 0, size_t(-1));
-        CHECK_EQUAL(size_t(-1), t);
 
+        {
+            size_t t = a.find_first<Greater>(0, 0, size_t(-1));
+            CHECK_EQUAL(size_t(-1), t);
+        }
 
         a.clear();
         for (size_t i = 0; i < items; ++i) {
@@ -1055,7 +930,7 @@ TEST(Array_Greater)
             a.set(i, 1);
 
             size_t t = a.find_first<Greater>(0, 0, size_t(-1));
-            TIGHTDB_ASSERT(i == t);
+            REALM_ASSERT(i == t);
 
             CHECK_EQUAL(i, t);
             a.set(i, 0);
@@ -1139,20 +1014,17 @@ TEST(Array_Greater)
 
         a.clear();
         for (size_t i = 0; i < items; ++i) {
-            a.add(1000ULL*1000ULL*1000ULL*1000ULL);
+            a.add(1000ULL * 1000ULL * 1000ULL * 1000ULL);
         }
         for (size_t i = 0; i < items; ++i) {
-            a.set(i, 1000ULL*1000ULL*1000ULL*1000ULL + 1ULL);
-            size_t t = a.find_first<Greater>(1000ULL*1000ULL*1000ULL*1000ULL, 0, size_t(-1));
+            a.set(i, 1000ULL * 1000ULL * 1000ULL * 1000ULL + 1ULL);
+            size_t t = a.find_first<Greater>(1000ULL * 1000ULL * 1000ULL * 1000ULL, 0, size_t(-1));
             CHECK_EQUAL(i, t);
-            a.set(i, 1000ULL*1000ULL*1000ULL*1000ULL);
+            a.set(i, 1000ULL * 1000ULL * 1000ULL * 1000ULL);
         }
-
     }
     a.destroy();
 }
-
-
 
 
 TEST(Array_Less)
@@ -1162,16 +1034,17 @@ TEST(Array_Less)
 
     size_t items = 400;
 
-    for (items = 2; items < 200; items += 7)
-    {
+    for (items = 2; items < 200; items += 7) {
 
         a.clear();
         for (size_t i = 0; i < items; ++i) {
             a.add(0);
         }
-        size_t t = a.find_first<Less>(0, 0, size_t(-1));
-        CHECK_EQUAL(size_t(-1), t);
 
+        {
+            size_t t = a.find_first<Less>(0, 0, size_t(-1));
+            CHECK_EQUAL(size_t(-1), t);
+        }
 
         a.clear();
         for (size_t i = 0; i < items; ++i) {
@@ -1262,15 +1135,14 @@ TEST(Array_Less)
 
         a.clear();
         for (size_t i = 0; i < items; ++i) {
-            a.add(1000ULL*1000ULL*1000ULL*1000ULL);
+            a.add(1000ULL * 1000ULL * 1000ULL * 1000ULL);
         }
         for (size_t i = 0; i < items; ++i) {
-            a.set(i, 1000ULL*1000ULL*1000ULL*1000ULL - 1ULL);
-            size_t t = a.find_first<Less>(1000ULL*1000ULL*1000ULL*1000ULL, 0, size_t(-1));
+            a.set(i, 1000ULL * 1000ULL * 1000ULL * 1000ULL - 1ULL);
+            size_t t = a.find_first<Less>(1000ULL * 1000ULL * 1000ULL * 1000ULL, 0, size_t(-1));
             CHECK_EQUAL(i, t);
-            a.set(i, 1000ULL*1000ULL*1000ULL*1000ULL);
+            a.set(i, 1000ULL * 1000ULL * 1000ULL * 1000ULL);
         }
-
     }
     a.destroy();
 }
@@ -1298,15 +1170,16 @@ TEST(Array_NotEqual)
 
     size_t items = 400;
 
-    for (items = 2; items < 200; items += 7)
-    {
+    for (items = 2; items < 200; items += 7) {
         a.clear();
         for (size_t i = 0; i < items; ++i) {
             a.add(0);
         }
-        size_t t = a.find_first<NotEqual>(0, 0, size_t(-1));
-        CHECK_EQUAL(size_t(-1), t);
 
+        {
+            size_t t = a.find_first<NotEqual>(0, 0, size_t(-1));
+            CHECK_EQUAL(size_t(-1), t);
+        }
 
         a.clear();
         for (size_t i = 0; i < items; ++i) {
@@ -1397,106 +1270,18 @@ TEST(Array_NotEqual)
 
         a.clear();
         for (size_t i = 0; i < items; ++i) {
-            a.add(1000ULL*1000ULL*1000ULL*1000ULL);
+            a.add(1000ULL * 1000ULL * 1000ULL * 1000ULL);
         }
         for (size_t i = 0; i < items; ++i) {
-            a.set(i, 1000ULL*1000ULL*1000ULL*1000ULL + 1ULL);
-            size_t t = a.find_first<NotEqual>(1000ULL*1000ULL*1000ULL*1000ULL, 0, size_t(-1));
+            a.set(i, 1000ULL * 1000ULL * 1000ULL * 1000ULL + 1ULL);
+            size_t t = a.find_first<NotEqual>(1000ULL * 1000ULL * 1000ULL * 1000ULL, 0, size_t(-1));
             CHECK_EQUAL(i, t);
-            a.set(i, 1000ULL*1000ULL*1000ULL*1000ULL);
+            a.set(i, 1000ULL * 1000ULL * 1000ULL * 1000ULL);
         }
-
     }
     a.destroy();
 }
 
-
-
-
-TEST(Array_Sort1)
-{
-    // negative values
-    Array a(Allocator::get_default());
-    a.create(Array::type_Normal);
-
-    Random random(random_int<unsigned long>()); // Seed from slow global generator
-    for (size_t t = 0; t < 400; ++t)
-        a.add(random.draw_int(-100, 199));
-
-    size_t orig_size = a.size();
-    a.sort();
-
-    CHECK(a.size() == orig_size);
-    for (size_t t = 1; t < a.size(); ++t)
-        CHECK(a.get(t) >= a.get(t - 1));
-
-    a.destroy();
-}
-
-
-TEST(Array_Sort2)
-{
-    // 64 bit values
-    Array a(Allocator::get_default());
-    a.create(Array::type_Normal);
-
-    Random random(random_int<unsigned long>()); // Seed from slow global generator
-    for (size_t t = 0; t < 400; ++t) {
-        int_fast64_t v = 1;
-        for (int i = 0; i != 8; ++i)
-            v *= int64_t(random.draw_int_max(RAND_MAX));
-        a.add(v);
-    }
-
-    size_t orig_size = a.size();
-    a.sort();
-
-    CHECK(a.size() == orig_size);
-    for (size_t t = 1; t < a.size(); ++t)
-        CHECK(a.get(t) >= a.get(t - 1));
-
-    a.destroy();
-}
-
-TEST(Array_Sort3)
-{
-    // many values
-    Array a(Allocator::get_default());
-    a.create(Array::type_Normal);
-
-    Random random(random_int<unsigned long>()); // Seed from slow global generator
-    for (size_t t = 0; t < 1000; ++t)
-        a.add(random.draw_int_max(200)); // 200 will make some duplicate values which is good
-
-    size_t orig_size = a.size();
-    a.sort();
-
-    CHECK(a.size() == orig_size);
-    for (size_t t = 1; t < a.size(); ++t)
-        CHECK(a.get(t) >= a.get(t - 1));
-
-    a.destroy();
-}
-
-
-TEST(Array_Sort4)
-{
-    // same values
-    Array a(Allocator::get_default());
-    a.create(Array::type_Normal);
-
-    for (size_t t = 0; t < 1000; ++t)
-        a.add(0);
-
-    size_t orig_size = a.size();
-    a.sort();
-
-    CHECK(a.size() == orig_size);
-    for (size_t t = 1; t < a.size(); ++t)
-        CHECK(a.get(t) == 0);
-
-    a.destroy();
-}
 
 TEST(Array_Copy)
 {
@@ -1512,8 +1297,8 @@ TEST(Array_Copy)
     Array b(Allocator::get_default());
     b.init_from_mem(a.clone_deep(Allocator::get_default()));
 
-#ifdef TIGHTDB_DEBUG
-    b.Verify();
+#ifdef REALM_DEBUG
+    b.verify();
 #endif
 
     CHECK_EQUAL(5, b.size());
@@ -1531,8 +1316,8 @@ TEST(Array_Copy)
     Array d(Allocator::get_default());
     d.init_from_mem(c.clone_deep(Allocator::get_default()));
 
-#ifdef TIGHTDB_DEBUG
-    d.Verify();
+#ifdef REALM_DEBUG
+    d.verify();
 #endif
 
     CHECK(d.has_refs());
@@ -1569,7 +1354,8 @@ TEST(Array_Count)
 
     // 1 bit width
     for (size_t i = 0; i < 100; ++i) {
-        if (i % 2) a.set(i, 1);
+        if (i % 2)
+            a.set(i, 1);
     }
     const size_t c3 = a.count(0);
     const size_t c4 = a.count(1);
@@ -1580,7 +1366,8 @@ TEST(Array_Count)
 
     // 2 bit width
     for (size_t i = 0; i < 100; ++i) {
-        if (i % 2) a.set(i, 2);
+        if (i % 2)
+            a.set(i, 2);
     }
     const size_t c5 = a.count(0);
     const size_t c6 = a.count(2);
@@ -1591,7 +1378,8 @@ TEST(Array_Count)
 
     // 4 bit width
     for (size_t i = 0; i < 100; ++i) {
-        if (i % 2) a.set(i, 7);
+        if (i % 2)
+            a.set(i, 7);
     }
     const size_t c7 = a.count(0);
     const size_t c8 = a.count(7);
@@ -1602,7 +1390,8 @@ TEST(Array_Count)
 
     // 8 bit width
     for (size_t i = 0; i < 100; ++i) {
-        if (i % 2) a.set(i, 100);
+        if (i % 2)
+            a.set(i, 100);
     }
     const size_t c9 = a.count(0);
     const size_t c10 = a.count(100);
@@ -1614,7 +1403,8 @@ TEST(Array_Count)
 
     // 16 bit width
     for (size_t i = 0; i < 100; ++i) {
-        if (i % 2) a.set(i, 500);
+        if (i % 2)
+            a.set(i, 500);
     }
     const size_t c11 = a.count(0);
     const size_t c12 = a.count(500);
@@ -1626,7 +1416,8 @@ TEST(Array_Count)
 
     // 32 bit width
     for (size_t i = 0; i < 100; ++i) {
-        if (i % 2) a.set(i, 0x1FFFF);
+        if (i % 2)
+            a.set(i, 0x1FFFF);
     }
     const size_t c13 = a.count(0);
     const size_t c14 = a.count(0x1FFFF);
@@ -1640,4 +1431,97 @@ TEST(Array_Count)
     a.destroy();
 }
 
+TEST(Array_FindGTE)
+{
+    // Zeroes only
+    {
+        Array c(Allocator::get_default());
+        c.create(Array::type_Normal);
+
+        c.add(0);
+        c.add(0);
+        c.add(0);
+        c.add(0);
+        c.add(0);
+        c.add(0);
+        c.add(0);
+        c.add(0);
+
+        CHECK_EQUAL(c.find_gte(1, 0), not_found);
+        CHECK_EQUAL(c.find_gte(0, 0), 0);
+        CHECK_EQUAL(c.find_gte(0, 5), 5);
+
+        c.destroy();
+    }
+
+    // Booleans only
+    {
+        Array c(Allocator::get_default());
+        c.create(Array::type_Normal);
+
+        c.add(0);
+        c.add(0);
+        c.add(1);
+        c.add(1);
+
+        CHECK_EQUAL(c.find_gte(2, 0), not_found);
+        CHECK_EQUAL(c.find_gte(0, 0), 0);
+        CHECK_EQUAL(c.find_gte(0, 2), 2);
+        CHECK_EQUAL(c.find_gte(1, 0), 2);
+        CHECK_EQUAL(c.find_gte(1, 3), 3);
+
+        c.destroy();
+    }
+
+    // Random values
+    {
+        Array c(Allocator::get_default());
+        c.create(Array::type_Normal);
+
+        c.add(-10293);
+        c.add(0);
+        c.add(1);
+        c.add(11111);
+        c.add(2819283);
+
+        CHECK_EQUAL(c.find_gte(3333333, 0), not_found);
+        CHECK_EQUAL(c.find_gte(10, 1), 3);
+        CHECK_EQUAL(c.find_gte(-20000, 0), 0);
+        CHECK_EQUAL(c.find_gte(-20000, 3), 3);
+        CHECK_EQUAL(c.find_gte(100000, 0), 4);
+        CHECK_EQUAL(c.find_gte(100000, 0, 4), not_found);
+
+        c.destroy();
+    }
+}
+
+TEST(Array_AdjustGEFuzzy)
+{
+    for (int iter = 0; iter < 100 + 100000 * TEST_DURATION; iter++) {
+        Array c(Allocator::get_default());
+        c.create(Array::type_Normal);
+        std::vector<int64_t> v;
+
+        for (size_t t = 0; t < 2; t++) {
+            int64_t r = fastrand(18) - 9;
+            c.add(r);
+            v.push_back(r);
+        }
+
+        int64_t limit = fastrand(18) - 9;
+        int64_t diff = fastrand(18) - 9;
+
+        c.adjust_ge(limit, diff);
+        for (size_t t = 0; t < 2; t++) {
+            if (v[t] >= limit)
+                v[t] += diff;
+        }
+
+        for (size_t t = 0; t < 2; t++) {
+            CHECK_EQUAL(v[t], c.get(t));
+        }
+
+        c.destroy();
+    }
+}
 #endif // TEST_ARRAY

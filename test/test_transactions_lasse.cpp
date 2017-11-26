@@ -1,32 +1,38 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "testsettings.hpp"
 #ifdef TEST_TRANSACTIONS_LASSE
 
 #include <cstdlib>
 #include <iostream>
+#include <thread>
 
-#ifdef _WIN32
-#  define NOMINMAX
-#  include <windows.h> // Sleep(), sched_yield()
-#  include <pthread.h> // pthread_win32_process_attach_np()
-#else
-#  include <sched.h>  // sched_yield()
-#  include <unistd.h> // usleep()
-#endif
-
-#include <tightdb.hpp>
-#include <tightdb/column.hpp>
-#include <tightdb/utilities.hpp>
-#include <tightdb/util/bind.hpp>
-#include <tightdb/util/file.hpp>
-
-#include "util/thread_wrapper.hpp"
+#include <realm.hpp>
+#include <realm/column.hpp>
+#include <realm/utilities.hpp>
+#include <realm/util/file.hpp>
 
 #include "test.hpp"
 
-using namespace std;
-using namespace tightdb;
-using namespace tightdb::test_util;
-using unit_test::TestResults;
+using namespace realm;
+using namespace realm::test_util;
+using unit_test::TestContext;
 
 
 // Test independence and thread-safety
@@ -64,10 +70,10 @@ using unit_test::TestResults;
 
 namespace {
 
-TIGHTDB_FORCEINLINE void rand_sleep(Random& random)
+REALM_FORCEINLINE void rand_sleep(Random& random)
 {
     const int64_t ms = 500000;
-    unsigned char r = random.draw_int<unsigned char>();
+    unsigned char r = static_cast<unsigned char>(random.draw_int<unsigned int>());
 
     if (r <= 244)
         return;
@@ -85,28 +91,19 @@ TIGHTDB_FORCEINLINE void rand_sleep(Random& random)
     }
     else if (r <= 252) {
         // Release current time slice but get next available
-        sched_yield();
+        std::this_thread::yield();
     }
     else if (r <= 254) {
-        // Release current time slice and get time slice according to normal scheduling
-#ifdef _MSC_VER
-        Sleep(0);
-#else
-        usleep(0);
-#endif
+// Release current time slice and get time slice according to normal scheduling
+        millisleep(0);
     }
     else {
-        // Release time slices for at least 200 ms
-#ifdef _MSC_VER
-        Sleep(200);
-#else
-        usleep(200);
-#endif
+// Release time slices for at least 200 ms
+        millisleep(200);
     }
 }
 
 } // anonymous namespace
-
 
 
 // *************************************************************************************
@@ -117,13 +114,12 @@ TIGHTDB_FORCEINLINE void rand_sleep(Random& random)
 
 namespace {
 
-const int ITER1 =    2000;
-const int READERS1 =   10;
-const int WRITERS1 =   10;
+const int ITER1 = 2000;
+const int READERS1 = 10;
+const int WRITERS1 = 10;
 
-void write_thread(TestResults* test_results_ptr, string path, int thread_ndx)
+void write_thread(TestContext& test_context, std::string path, int thread_ndx)
 {
-    TestResults& test_results = *test_results_ptr;
     int_least64_t w = thread_ndx;
     Random random(random_int<unsigned long>()); // Seed from slow global generator
     SharedGroup sg(path);
@@ -131,7 +127,7 @@ void write_thread(TestResults* test_results_ptr, string path, int thread_ndx)
     for (int i = 0; i < ITER1; ++i) {
         {
             WriteTransaction wt(sg);
-            TableRef table = wt.get_table("table");
+            TableRef table = wt.get_or_add_table("table");
             table->set_int(0, 0, w);
             rand_sleep(random);
             int64_t r = table->get_int(0, 0);
@@ -144,9 +140,8 @@ void write_thread(TestResults* test_results_ptr, string path, int thread_ndx)
     }
 }
 
-void read_thread(TestResults* test_results_ptr, string path)
+void read_thread(TestContext& test_context, std::string path)
 {
-    TestResults& test_results = *test_results_ptr;
     Random random(random_int<unsigned long>()); // Seed from slow global generator
     SharedGroup sg(path);
     for (int i = 0; i < ITER1; ++i) {
@@ -170,7 +165,7 @@ TEST_IF(Transactions_Stress1, TEST_DURATION >= 3)
     SharedGroup sg(path);
     {
         WriteTransaction wt(sg);
-        TableRef table = wt.get_table("table");
+        TableRef table = wt.get_or_add_table("table");
         DescriptorRef desc = table->get_descriptor();
         desc->add_column(type_Int, "row");
         table->insert_empty_row(0, 1);
@@ -178,15 +173,11 @@ TEST_IF(Transactions_Stress1, TEST_DURATION >= 3)
         wt.commit();
     }
 
-#if defined(_WIN32) || defined(__WIN32__) || defined(_WIN64)
-    pthread_win32_process_attach_np ();
-#endif
-
     for (int i = 0; i < READERS1; ++i)
-        read_threads[i].start(util::bind(&read_thread, &test_results, string(path)));
+        read_threads[i].start([&] { read_thread(test_context, path); });
 
     for (int i = 0; i < WRITERS1; ++i)
-        write_threads[i].start(util::bind(&write_thread, &test_results, string(path), i));
+        write_threads[i].start([this, &path, i] { write_thread(test_context, path, i); });
 
     for (int i = 0; i < READERS1; ++i) {
         bool reader_has_thrown = read_threads[i].join();
@@ -208,11 +199,11 @@ TEST_IF(Transactions_Stress1, TEST_DURATION >= 3)
 
 namespace {
 
-const int      THREADS2 = 30;
-const int      ITER2    = 2000;
-const unsigned GROUPS2  = 30;
+const int THREADS2 = 30;
+const int ITER2 = 2000;
+const unsigned GROUPS2 = 30;
 
-void create_groups(string path)
+void create_groups(std::string path)
 {
     Random random(random_int<unsigned long>()); // Seed from slow global generator
     std::vector<SharedGroup*> groups;
@@ -245,7 +236,7 @@ TEST_IF(Transactions_Stress2, TEST_DURATION >= 3)
     SHARED_GROUP_TEST_PATH(path);
 
     for (int i = 0; i < THREADS2; ++i)
-        threads[i].start(util::bind(&create_groups, string(path)));
+        threads[i].start(std::bind(&create_groups, std::string(path)));
 
     for (int i = 0; i < THREADS2; ++i) {
         bool thread_has_thrown = threads[i].join();
@@ -264,107 +255,107 @@ namespace {
 
 // Must be fast because important edge case is 0 delay.
 struct FastRand {
-    FastRand(): u(1), v(1) {}
+    FastRand()
+        : u(1)
+        , v(1)
+    {
+    }
     unsigned int operator()()
     {
-        v = 36969*(v & 65535) + (v >> 16);
-        u = 18000*(u & 65535) + (u >> 16);
+        v = 36969 * (v & 65535) + (v >> 16);
+        u = 18000 * (u & 65535) + (u >> 16);
         return (v << 16) + u;
     }
+
 private:
     unsigned int u;
     unsigned int v;
 };
-
-const int ITER3 =     20;
-const int WRITERS3 =   4;
-const int READERS3 =   4;
-const size_t ROWS3 = 1*1000*1000 + 1000; // + 1000 to add extra depth level if TIGHTDB_MAX_BPNODE_SIZE = 1000
-volatile bool terminate3 = false;
-
-void write_thread3(string path)
-{
-    Random random(random_int<unsigned long>()); // Seed from slow global generator
-    FastRand fast_rand;
-    SharedGroup sg(path);
-
-    for (int i = 0; i < ITER3; ++i) {
-        WriteTransaction wt(sg);
-        TableRef table = wt.get_table("table");
-        size_t s = table->size();
-
-        if (random.draw_bool() && s > 0) {
-            size_t from = fast_rand() % s;
-            size_t n = fast_rand() % (s - from + 1);
-            for (size_t t = 0; t < n; ++t)
-                table->remove(from);
-        }
-        else if (s < ROWS3 / 2) {
-            size_t at = fast_rand() % (s + 1);
-            size_t n = fast_rand() % ROWS3;
-            for (size_t t = 0; t < n; ++t) {
-                table->insert_empty_row(at);
-                table->set_int(0, at, fast_rand() % 80);
-            }
-        }
-
-        wt.commit();
-    }
-}
-
-void read_thread3(TestResults* test_results_ptr, string path)
-{
-    TestResults& test_results = *test_results_ptr;
-    Random random(random_int<unsigned long>()); // Seed from slow global generator
-    SharedGroup sg(path);
-    while (!terminate3) { // FIXME: Oops - this 'read' participates in a data race - http://stackoverflow.com/questions/12878344/volatile-in-c11
-        ReadTransaction rt(sg);
-        if(rt.get_table("table")->size() > 0) {
-            int64_t r1 = rt.get_table("table")->get_int(0,0);
-            rand_sleep(random);
-            int64_t r2 = rt.get_table("table")->get_int(0,0);
-            CHECK_EQUAL(r1, r2);
-        }
-    }
-}
 
 } // anonymous namespace
 
 
 TEST_IF(Transactions_Stress3, TEST_DURATION >= 3)
 {
-    test_util::ThreadWrapper write_threads[WRITERS3];
-    test_util::ThreadWrapper read_threads[READERS3];
-
     SHARED_GROUP_TEST_PATH(path);
+
+    const int ITER = 20;
+    const int WRITERS = 4;
+    const int READERS = 4;
+    const size_t ROWS = 1 * 1000 * 1000 + 1000; // + 1000 to add extra depth level if REALM_MAX_BPNODE_SIZE = 1000
+    std::atomic<bool> terminate{false};
+
+    auto write_thread = [&] {
+        Random random(random_int<unsigned long>()); // Seed from slow global generator
+        FastRand fast_rand;
+        SharedGroup sg(path);
+
+        for (int i = 0; i < ITER; ++i) {
+            WriteTransaction wt(sg);
+            TableRef table = wt.get_or_add_table("table");
+            size_t s = table->size();
+
+            if (random.draw_bool() && s > 0) {
+                size_t from = fast_rand() % s;
+                size_t n = fast_rand() % (s - from + 1);
+                for (size_t t = 0; t < n; ++t)
+                    table->remove(from);
+            }
+            else if (s < ROWS / 2) {
+                size_t at = fast_rand() % (s + 1);
+                size_t n = fast_rand() % ROWS;
+                for (size_t t = 0; t < n; ++t) {
+                    table->insert_empty_row(at);
+                    table->set_int(0, at, fast_rand() % 80);
+                }
+            }
+
+            wt.commit();
+        }
+    };
+
+    auto read_thread = [&] {
+        Random random(random_int<unsigned long>()); // Seed from slow global generator
+        SharedGroup sg(path);
+        while (!terminate) {
+            ReadTransaction rt(sg);
+            if (rt.get_table("table")->size() > 0) {
+                int64_t r1 = rt.get_table("table")->get_int(0, 0);
+                rand_sleep(random);
+                int64_t r2 = rt.get_table("table")->get_int(0, 0);
+                CHECK_EQUAL(r1, r2);
+            }
+        }
+    };
+
+    test_util::ThreadWrapper write_threads[WRITERS];
+    test_util::ThreadWrapper read_threads[READERS];
+
     SharedGroup sg(path);
 
     {
         WriteTransaction wt(sg);
-        TableRef table = wt.get_table("table");
+        TableRef table = wt.get_or_add_table("table");
         DescriptorRef desc = table->get_descriptor();
         desc->add_column(type_Int, "row");
         wt.commit();
     }
 
-#if defined(_WIN32) || defined(__WIN32__) || defined(_WIN64)
-    pthread_win32_process_attach_np ();
-#endif
+    for (int i = 0; i < WRITERS; ++i)
+        write_threads[i].start(write_thread);
 
-    for (int i = 0; i < WRITERS3; ++i)
-        write_threads[i].start(util::bind(&write_thread3, string(path)));
+    for (int i = 0; i < READERS; ++i)
+        read_threads[i].start(read_thread);
 
-    for (int i = 0; i < READERS3; ++i)
-        read_threads[i].start(util::bind(&read_thread3, &test_results, string(path)));
-
-    for (int i = 0; i < WRITERS3; ++i) {
+    for (int i = 0; i < WRITERS; ++i) {
         bool writer_has_thrown = write_threads[i].join();
         CHECK(!writer_has_thrown);
     }
 
     // Terminate reader threads cleanly
-    terminate3 = true; // FIXME: Oops - this 'write' participates in a data race - http://stackoverflow.com/questions/12878344/volatile-in-c11
-    for (int i = 0; i < READERS3; ++i) {
+    terminate = true; // FIXME: Oops - this 'write' participates in a data race -
+    // http://stackoverflow.com/questions/12878344/volatile-in-c11
+    for (int i = 0; i < READERS; ++i) {
         bool reader_has_thrown = read_threads[i].join();
         CHECK(!reader_has_thrown);
     }
@@ -378,64 +369,56 @@ TEST_IF(Transactions_Stress3, TEST_DURATION >= 3)
 // *
 // *************************************************************************************
 
-namespace {
-
-const int ITER4 =    2000;
-const int READERS4 =   20;
-const int WRITERS4 =   20;
-volatile bool terminate4 = false;
-
-void write_thread4(TestResults* test_results_ptr, string path, int thread_ndx)
-{
-    TestResults& test_results = *test_results_ptr;
-    int_least64_t w = thread_ndx;
-    Random random(random_int<unsigned long>()); // Seed from slow global generator
-    SharedGroup sg(path);
-
-    for (int i = 0; i < ITER4; ++i) {
-        {
-            WriteTransaction wt(sg);
-            TableRef table = wt.get_table("table");
-            table->set_int(0, 0, w);
-            rand_sleep(random);
-            int64_t r = table->get_int(0, 0);
-            CHECK_EQUAL(r, w);
-            wt.commit();
-        }
-
-        // All writes by all threads must be unique so that it can be detected if they're spurious
-        w += 1000;
-    }
-}
-
-void read_thread4(TestResults* test_results_ptr, string path)
-{
-    TestResults& test_results = *test_results_ptr;
-    Random random(random_int<unsigned long>()); // Seed from slow global generator
-    SharedGroup sg(path);
-    while (!terminate4) { // FIXME: Oops - this 'read' participates in a data race - http://stackoverflow.com/questions/12878344/volatile-in-c11
-        ReadTransaction rt(sg);
-        int64_t r1 = rt.get_table("table")->get_int(0, 0);
-        rand_sleep(random);
-        int64_t r2 = rt.get_table("table")->get_int(0, 0);
-        CHECK_EQUAL(r1, r2);
-    }
-}
-
-} // anonymous namespace
-
-
 TEST_IF(Transactions_Stress4, TEST_DURATION >= 3)
 {
-    test_util::ThreadWrapper read_threads[READERS4];
-    test_util::ThreadWrapper write_threads[WRITERS4];
-
     SHARED_GROUP_TEST_PATH(path);
+
+    const int ITER = 2000;
+    const int READERS = 20;
+    const int WRITERS = 20;
+    std::atomic<bool> terminate{false};
+
+    auto write_thread = [&](int thread_ndx) {
+        int_least64_t w = thread_ndx;
+        Random random(random_int<unsigned long>()); // Seed from slow global generator
+        SharedGroup sg(path);
+
+        for (int i = 0; i < ITER; ++i) {
+            {
+                WriteTransaction wt(sg);
+                TableRef table = wt.get_or_add_table("table");
+                table->set_int(0, 0, w);
+                rand_sleep(random);
+                int64_t r = table->get_int(0, 0);
+                CHECK_EQUAL(r, w);
+                wt.commit();
+            }
+
+            // All writes by all threads must be unique so that it can be detected if they're spurious
+            w += 1000;
+        }
+    };
+
+    auto read_thread = [&] {
+        Random random(random_int<unsigned long>()); // Seed from slow global generator
+        SharedGroup sg(path);
+        while (!terminate) {
+            ReadTransaction rt(sg);
+            int64_t r1 = rt.get_table("table")->get_int(0, 0);
+            rand_sleep(random);
+            int64_t r2 = rt.get_table("table")->get_int(0, 0);
+            CHECK_EQUAL(r1, r2);
+        }
+    };
+
+    test_util::ThreadWrapper read_threads[READERS];
+    test_util::ThreadWrapper write_threads[WRITERS];
+
     SharedGroup sg(path);
 
     {
         WriteTransaction wt(sg);
-        TableRef table = wt.get_table("table");
+        TableRef table = wt.get_or_add_table("table");
         DescriptorRef desc = table->get_descriptor();
         desc->add_column(type_Int, "row");
         table->insert_empty_row(0, 1);
@@ -443,23 +426,19 @@ TEST_IF(Transactions_Stress4, TEST_DURATION >= 3)
         wt.commit();
     }
 
-#if defined(_WIN32) || defined(__WIN32__) || defined(_WIN64)
-    pthread_win32_process_attach_np ();
-#endif
+    for (int i = 0; i < READERS; ++i)
+        read_threads[i].start(read_thread);
 
-    for (int i = 0; i < READERS4; ++i)
-        read_threads[i].start(util::bind(&read_thread4, &test_results, string(path)));
+    for (int i = 0; i < WRITERS; ++i)
+        write_threads[i].start([=] { write_thread(i); });
 
-    for (int i = 0; i < WRITERS4; ++i)
-        write_threads[i].start(util::bind(&write_thread4, &test_results, string(path), i));
-
-    for (int i = 0; i < WRITERS4; ++i) {
+    for (int i = 0; i < WRITERS; ++i) {
         bool writer_has_thrown = write_threads[i].join();
         CHECK(!writer_has_thrown);
     }
 
-    terminate4 = true; // FIXME: Oops - this 'write' participates in a data race - http://stackoverflow.com/questions/12878344/volatile-in-c11
-    for (int i = 0; i < READERS4; ++i) {
+    terminate = true;
+    for (int i = 0; i < READERS; ++i) {
         bool reader_has_thrown = read_threads[i].join();
         CHECK(!reader_has_thrown);
     }

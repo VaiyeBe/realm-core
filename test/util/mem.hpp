@@ -1,43 +1,42 @@
 /*************************************************************************
  *
- * TIGHTDB CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] TightDB Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of TightDB Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to TightDB Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from TightDB Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
-#ifndef TIGHTDB_TEST_UTIL_MEM_HPP
-#define TIGHTDB_TEST_UTIL_MEM_HPP
+
+#ifndef REALM_TEST_UTIL_MEM_HPP
+#define REALM_TEST_UTIL_MEM_HPP
 
 #include <cstddef>
 
-namespace tightdb {
+namespace realm {
 namespace test_util {
 
 
 /// Returns the amount (in number of bytes) of virtaul memory
 /// allocated to the calling process.
 ///
-/// FIXME: 'std::size_t' is inappropriate for holding the total memory
+/// FIXME: 'size_t' is inappropriate for holding the total memory
 /// usage. C++11 guarantees only that it can hold the size of a single
-/// object or array. 'std::uintptr_t' would have been the ideal type
+/// object or array. 'uintptr_t' would have been the ideal type
 /// to use here, but C++11 does not required it to be available (see
 /// 18.4.1 "Header <cstdint> synopsis".)
-std::size_t get_mem_usage();
+size_t get_mem_usage();
 
 
 } // namespace test_util
-} // namespace tightdb
+} // namespace realm
 
-#endif // TIGHTDB_TEST_UTIL_MEM_HPP
+#endif // REALM_TEST_UTIL_MEM_HPP

@@ -1,11 +1,29 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "../testsettings.hpp"
 #ifdef TEST_COLUMN_LARGE
 
 #include <algorithm>
 #include <vector>
 
-#include <tightdb/column.hpp>
-#include <tightdb/query_conditions.hpp>
+#include <realm/column.hpp>
+#include <realm/query_conditions.hpp>
 
 #include "../util/verified_integer.hpp"
 
@@ -14,9 +32,8 @@
 #define LL_MAX (9223372036854775807LL)
 #define LL_MIN (-LL_MAX - 1)
 
-using namespace std;
-using namespace tightdb;
-using namespace tightdb::test_util;
+using namespace realm;
+using namespace realm::test_util;
 
 
 // Test independence and thread-safety
@@ -50,32 +67,129 @@ using namespace tightdb::test_util;
 
 
 // These tests take ~5 min in release mode with
-// TIGHTDB_MAX_BPNODE_SIZE=1000
+// REALM_MAX_BPNODE_SIZE=1000
 
 
 TEST_IF(ColumnLarge_Less, TEST_DURATION >= 3)
 {
     // Interesting boundary values to test
-    int64_t v[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
-                     30, 31, 32, 33, 62, 63, 64, 65, 126, 127, 128, 129, 254, 255,
-                     256, 257, 32765, 32766, 32767, 32768, 32769, 65533, 65534, 65535, 65536, 65537, 2147483648LL,
-                     2147483647LL, 2147483646LL, 2147483649LL, 4294967296LL, 4294967295LL,
-                     4294967297LL, 4294967294LL, 9223372036854775807LL, 9223372036854775806LL,
-                     -1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12, -13, -14, -15, -16, -17,
-                     -30, -31, -32, -33, -62, -63, -64, -65, -126, -127, -128, -129, -254, -255,
-                     -256, -257, -32766, -32767, -32768, -32769, -65535, -65536, -65537, -2147483648LL,
-                     -2147483647LL, -2147483646LL, -2147483649LL, -4294967296LL, -4294967295LL,
-                     4294967297LL, -4294967294LL, -9223372036854775807LL, (-9223372036854775807LL - 1), -9223372036854775806LL,
-                     /* (-9223372036854775807LL - 1) because -9223372036854775808LL is buggy; it's seen as a minus token and then a right-hand-side
-                     exceeding long long's range. Furthermore, numeric_limits<int64_t>::min is typedef'ed to 'long long' which cannot be used in
-                     initializer list for int64_t */
+    int64_t v[] = {
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        30,
+        31,
+        32,
+        33,
+        62,
+        63,
+        64,
+        65,
+        126,
+        127,
+        128,
+        129,
+        254,
+        255,
+        256,
+        257,
+        32765,
+        32766,
+        32767,
+        32768,
+        32769,
+        65533,
+        65534,
+        65535,
+        65536,
+        65537,
+        2147483648LL,
+        2147483647LL,
+        2147483646LL,
+        2147483649LL,
+        4294967296LL,
+        4294967295LL,
+        4294967297LL,
+        4294967294LL,
+        9223372036854775807LL,
+        9223372036854775806LL,
+        -1,
+        -2,
+        -3,
+        -4,
+        -5,
+        -6,
+        -7,
+        -8,
+        -9,
+        -10,
+        -11,
+        -12,
+        -13,
+        -14,
+        -15,
+        -16,
+        -17,
+        -30,
+        -31,
+        -32,
+        -33,
+        -62,
+        -63,
+        -64,
+        -65,
+        -126,
+        -127,
+        -128,
+        -129,
+        -254,
+        -255,
+        -256,
+        -257,
+        -32766,
+        -32767,
+        -32768,
+        -32769,
+        -65535,
+        -65536,
+        -65537,
+        -2147483648LL,
+        -2147483647LL,
+        -2147483646LL,
+        -2147483649LL,
+        -4294967296LL,
+        -4294967295LL,
+        4294967297LL,
+        -4294967294LL,
+        -9223372036854775807LL,
+        (-9223372036854775807LL - 1),
+        -9223372036854775806LL,
+        /* (-9223372036854775807LL - 1) because -9223372036854775808LL is buggy; it's seen as a minus token and then a
+        right-hand-side
+        exceeding long long's range. Furthermore, std::numeric_limits<int64_t>::min is typedef'ed to 'long long' which
+        cannot be used in
+        initializer list for int64_t */
     };
-
 
 
     for (size_t w = 0; w < sizeof(v) / sizeof(*v); w++) {
         const size_t LEN = 64 * 20 + 1000;
-        Array a(Allocator::get_default());
+        ArrayInteger a(Allocator::get_default());
         a.create(Array::type_Normal);
         for (size_t t = 0; t < LEN; t++)
             a.add(v[w]);
@@ -85,8 +199,8 @@ TEST_IF(ColumnLarge_Less, TEST_DURATION >= 3)
         // before and after)
         size_t LEN2 = 64 * 8 / (a.get_width() == 0 ? 1 : a.get_width());
 
-        ref_type accu_ref = Column::create(Allocator::get_default());
-        Column accu(Allocator::get_default(), accu_ref);
+        ref_type accu_ref = IntegerColumn::create(Allocator::get_default());
+        IntegerColumn accu(Allocator::get_default(), accu_ref);
         QueryState<int64_t> state;
         state.m_state = int64_t(&accu);
 
@@ -99,7 +213,7 @@ TEST_IF(ColumnLarge_Less, TEST_DURATION >= 3)
                         a.set(match, v[w] - 1);
                         state.init(act_ReturnFirst, &accu, size_t(-1));
                         a.find(cond_Less, act_ReturnFirst, v[w], from, to, 0, &state);
-                        size_t f = state.m_state;
+                        size_t f = to_size_t(state.m_state);
                         a.set(match, v[w]);
                         if (match >= from && match < to) {
                             CHECK(match == f);
@@ -114,7 +228,7 @@ TEST_IF(ColumnLarge_Less, TEST_DURATION >= 3)
                         a.set(match, v[w] + 1);
                         state.init(act_ReturnFirst, &accu, size_t(-1));
                         a.find(cond_Greater, act_ReturnFirst, v[w], from, to, 0, &state);
-                        size_t f = state.m_state;
+                        size_t f = to_size_t(state.m_state);
                         a.set(match, v[w]);
                         if (match >= from && match < to) {
                             CHECK(match == f);
@@ -125,8 +239,8 @@ TEST_IF(ColumnLarge_Less, TEST_DURATION >= 3)
                     }
 
                     // FIND
-                    a.set(match, v[w]-1);
-                    size_t f = a.find_first(v[w]-1, from, to);
+                    a.set(match, v[w] - 1);
+                    size_t f = a.find_first(v[w] - 1, from, to);
                     a.set(match, v[w]);
                     if (match >= from && match < to) {
                         CHECK(match == f);
@@ -138,12 +252,12 @@ TEST_IF(ColumnLarge_Less, TEST_DURATION >= 3)
                     if (v[w] != LL_MIN) {
                         // MIN
                         int64_t val = 0;
-                        a.set(match, v[w]-1);
+                        a.set(match, v[w] - 1);
                         bool b = a.minimum(val, from, to);
                         a.set(match, v[w]);
                         CHECK_EQUAL(true, b);
                         if (match >= from && match < to)
-                            CHECK(val == v[w]-1);
+                            CHECK(val == v[w] - 1);
                         else
                             CHECK(val == v[w]);
                     }
@@ -151,19 +265,19 @@ TEST_IF(ColumnLarge_Less, TEST_DURATION >= 3)
                     // MAX
                     if (v[w] != LL_MAX) {
                         int64_t val = 0;
-                        a.set(match, v[w]+1);
+                        a.set(match, v[w] + 1);
                         bool b = a.maximum(val, from, to);
                         a.set(match, v[w]);
                         CHECK_EQUAL(true, b);
                         if (match >= from && match < to)
-                            CHECK(val == v[w]+1);
+                            CHECK(val == v[w] + 1);
                         else
                             CHECK(val == v[w]);
                     }
 
                     // SUM
                     int64_t val = 0;
-                    a.set(match, v[w]+1);
+                    a.set(match, v[w] + 1);
                     val = a.sum(from, to);
                     a.set(match, v[w]);
                     int64_t intended;
@@ -198,7 +312,6 @@ TEST_IF(ColumnLarge_Less, TEST_DURATION >= 3)
 
                             a.set(match, v[w]);
                             a.set(match + off, v[w]);
-
                         }
                     }
 
@@ -256,7 +369,6 @@ TEST_IF(ColumnLarge_Less, TEST_DURATION >= 3)
                     }
                 }
             }
-
         }
         a.destroy();
     }
@@ -270,16 +382,17 @@ TEST_IF(ColumnLarge_Monkey2, TEST_DURATION >= 2)
 
     Random random(seed);
     VerifiedInteger a(random);
-    ref_type res_ref = Column::create(Allocator::get_default());
-    Column res(Allocator::get_default(), res_ref);
+    ref_type res_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn res(Allocator::get_default(), res_ref);
 
     int trend = 5;
 
     for (int current_bitwidth = 0; current_bitwidth < 65; ++current_bitwidth) {
         for (size_t iter = 0; iter < ITER_PER_BITWIDTH; ++iter) {
 
-//            if (random.chance(1, 10))
-//                cout << "Input bitwidth around ~"<<current_bitwidth<<", , a.Size()="<<a.size()<<"\n";
+            //            if (random.chance(1, 10))
+            //                std::cout << "Input bitwidth around ~"<<current_bitwidth<<", ,
+            //                a.Size()="<<a.size()<<"\n";
 
             if (random.draw_int_mod(ITER_PER_BITWIDTH / 100) == 0) {
                 trend = random.draw_int_mod(10);

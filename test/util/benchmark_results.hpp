@@ -1,30 +1,29 @@
 /*************************************************************************
  *
- * TIGHTDB CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] TightDB Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of TightDB Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to TightDB Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from TightDB Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
-#ifndef TIGHTDB_TEST_UTIL_BENCHMARK_RESULTS_HPP
-#define TIGHTDB_TEST_UTIL_BENCHMARK_RESULTS_HPP
+
+#ifndef REALM_TEST_UTIL_BENCHMARK_RESULTS_HPP
+#define REALM_TEST_UTIL_BENCHMARK_RESULTS_HPP
 
 #include <vector>
 #include <map>
 #include <string>
 
-namespace tightdb {
+namespace realm {
 namespace test_util {
 
 
@@ -36,25 +35,41 @@ public:
     enum ChangeType {
         change_Percent,
         change_DropFactor,
-        change_RiseFactor
+        change_RiseFactor,
     };
 
-    void submit(double elapsed_seconds, const char* ident, const char* lead_text,
-                ChangeType = change_Percent);
+    /// Use submit_single() when you know there is only going to be a single datapoint.
+    void submit_single(const char* ident, const char* lead_text, double seconds, ChangeType = change_Percent);
+
+    /// Use submit() when there are multiple data points, and call finish() when you are done.
+    void submit(const char* ident, double seconds);
+    void finish(const std::string& ident, const std::string& lead_text, ChangeType = change_Percent);
 
 private:
     int m_max_lead_text_width;
-    const char* const m_results_file_stem;
+    std::string m_results_file_stem;
 
     struct Result {
-        Result(double elapsed_seconds, const char* ident):
-            m_elapsed_seconds(elapsed_seconds), m_ident(ident) {}
-        double m_elapsed_seconds;
-        const char* m_ident;
+        Result();
+        double min;
+        double max;
+        double total;
+        double stddev;
+        double median;
+        size_t rep;
+
+        double avg() const;
     };
-    typedef std::vector<Result> Results;
-    Results m_results;
-    typedef std::map<std::string, double> BaselineResults;
+
+    struct Measurement {
+        std::vector<double> samples;
+
+        Result finish() const;
+    };
+
+    typedef std::map<std::string, Measurement> Measurements;
+    Measurements m_measurements;
+    typedef std::map<std::string, Result> BaselineResults;
     BaselineResults m_baseline_results;
 
     void try_load_baseline_results();
@@ -62,24 +77,23 @@ private:
 };
 
 
-
-
 // Implementation:
 
-inline BenchmarkResults::BenchmarkResults(int max_lead_text_width, const char* results_file_stem):
-    m_max_lead_text_width(max_lead_text_width), m_results_file_stem(results_file_stem)
+inline BenchmarkResults::BenchmarkResults(int max_lead_text_width, const char* results_file_stem)
+    : m_max_lead_text_width(max_lead_text_width)
+    , m_results_file_stem(results_file_stem)
 {
     try_load_baseline_results();
 }
 
 inline BenchmarkResults::~BenchmarkResults()
 {
-    if (!m_results.empty())
+    if (!m_measurements.empty())
         save_results();
 }
 
 
 } // namespace test_util
-} // namespace tightdb
+} // namespace realm
 
-#endif // TIGHTDB_TEST_UTIL_BENCHMARK_RESULTS_HPP
+#endif // REALM_TEST_UTIL_BENCHMARK_RESULTS_HPP

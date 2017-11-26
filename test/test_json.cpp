@@ -1,3 +1,21 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "testsettings.hpp"
 #ifdef TEST_JSON
 
@@ -7,19 +25,17 @@
 #include <fstream>
 #include <ostream>
 
-#include <tightdb.hpp>
-#include <tightdb/lang_bind_helper.hpp>
+#include <realm.hpp>
+#include <realm/lang_bind_helper.hpp>
 
 #include "util/misc.hpp"
 #include "util/jsmn.hpp"
 
 #include "test.hpp"
 
-using namespace std;
-using namespace tightdb;
-using namespace tightdb::util;
-using namespace tightdb::test_util;
-using unit_test::TestResults;
+using namespace realm;
+using namespace realm::util;
+using namespace realm::test_util;
 
 
 // Test independence and thread-safety
@@ -53,7 +69,7 @@ using unit_test::TestResults;
 
 namespace {
 
-static bool generate_all = false;
+const bool generate_all = false;
 
 // After modifying json methods in core, set above generate_all = true to
 // make the unit tests output their results to files. Then inspect the
@@ -70,18 +86,18 @@ void setup_multi_table(Table& table, size_t rows, size_t sub_rows, bool fixed_su
     // Create table with all column types
     {
         DescriptorRef sub1;
-        table.add_column(type_Int, "int");              //  0
-        table.add_column(type_Bool, "bool");             //  1
-        table.add_column(type_DateTime, "date");             //  2
-        table.add_column(type_Float, "float");            //  3
+        table.add_column(type_Int, "int");                 //  0
+        table.add_column(type_Bool, "bool");               //  1
+        table.add_column(type_OldDateTime, "date");        //  2
+        table.add_column(type_Float, "float");             //  3
         table.add_column(type_Double, "double");           //  4
         table.add_column(type_String, "string");           //  5
         table.add_column(type_String, "string_long");      //  6
         table.add_column(type_String, "string_big_blobs"); //  7
-        table.add_column(type_String, "string_enum");      //  8 - becomes ColumnStringEnum
+        table.add_column(type_String, "string_enum");      //  8 - becomes StringEnumColumn
         table.add_column(type_Binary, "binary");           //  9
-        table.add_column(type_Table, "tables", &sub1);    // 10
-        table.add_column(type_Mixed, "mixed");            // 11
+        table.add_column(type_Table, "tables", &sub1);     // 10
+        table.add_column(type_Mixed, "mixed");             // 11
         sub1->add_column(type_Int, "sub_first");
         sub1->add_column(type_String, "sub_second");
     }
@@ -90,56 +106,58 @@ void setup_multi_table(Table& table, size_t rows, size_t sub_rows, bool fixed_su
 
     for (size_t i = 0; i < rows; ++i) {
         int64_t sign = (i % 2 == 0) ? 1 : -1;
-        table.set_int(0, i, int64_t(i*sign));
+        table.set_int(0, i, int64_t(i * sign));
     }
     for (size_t i = 0; i < rows; ++i)
         table.set_bool(1, i, (i % 2 ? true : false));
     for (size_t i = 0; i < rows; ++i)
-        table.set_datetime(2, i, 12345);
+        table.set_olddatetime(2, i, 12345);
     for (size_t i = 0; i < rows; ++i) {
         int64_t sign = (i % 2 == 0) ? 1 : -1;
-        table.set_float(3, i, 123.456f*sign);
+        table.set_float(3, i, 123.456f * sign);
     }
     for (size_t i = 0; i < rows; ++i) {
         int64_t sign = (i % 2 == 0) ? 1 : -1;
-        table.set_double(4, i, 9876.54321*sign);
+        table.set_double(4, i, 9876.54321 * sign);
     }
-    vector<string> strings;
+    std::vector<std::string> strings;
     for (size_t i = 0; i < rows; ++i) {
-        stringstream out;
+        std::stringstream out;
         out << "string" << i;
         strings.push_back(out.str());
     }
     for (size_t i = 0; i < rows; ++i)
         table.set_string(5, i, strings[i]);
-    for (size_t i = 0; i < rows; ++i)
-        table.set_string(6, i, strings[i] + " very long string.........");
+    for (size_t i = 0; i < rows; ++i) {
+        std::string long_str = strings[i] + " very long string.........";
+        table.set_string(6, i, long_str);
+    }
     for (size_t i = 0; i < rows; ++i) {
         switch (i % 2) {
-        case 0: {
-                    string s = strings[i];
-                    s += " very long string.........";
-                    for (int j = 0; j != 4; ++j)
-                        s += " big blobs big blobs big blobs"; // +30
-                    table.set_string(7, i, s);
-                    break;
-        }
-        case 1:
-            table.set_string(7, i, "");
-            break;
+            case 0: {
+                std::string s = strings[i];
+                s += " very long string.........";
+                for (int j = 0; j != 4; ++j)
+                    s += " big blobs big blobs big blobs"; // +30
+                table.set_string(7, i, s);
+                break;
+            }
+            case 1:
+                table.set_string(7, i, "");
+                break;
         }
     }
     for (size_t i = 0; i < rows; ++i) {
         switch (i % 3) {
-        case 0:
-            table.set_string(8, i, "enum1");
-            break;
-        case 1:
-            table.set_string(8, i, "enum2");
-            break;
-        case 2:
-            table.set_string(8, i, "enum3");
-            break;
+            case 0:
+                table.set_string(8, i, "enum1");
+                break;
+            case 1:
+                table.set_string(8, i, "enum2");
+                break;
+            case 2:
+                table.set_string(8, i, "enum3");
+                break;
         }
     }
     for (size_t i = 0; i < rows; ++i)
@@ -151,65 +169,65 @@ void setup_multi_table(Table& table, size_t rows, size_t sub_rows, bool fixed_su
             n += i;
         for (size_t j = 0; j != n; ++j) {
             TableRef subtable = table.get_subtable(10, i);
-            int64_t val = -123 + i*j * 1234 * sign;
-            subtable->insert_int(0, j, val);
-            subtable->insert_string(1, j, "sub");
-            subtable->insert_done();
+            int64_t val = -123 + i * j * 1234 * sign;
+            subtable->insert_empty_row(j);
+            subtable->set_int(0, j, val);
+            subtable->set_string(1, j, "sub");
         }
     }
     for (size_t i = 0; i < rows; ++i) {
         int64_t sign = (i % 2 == 0) ? 1 : -1;
         switch (i % 8) {
-        case 0:
-            table.set_mixed(11, i, false);
-            break;
-        case 1:
-            table.set_mixed(11, i, int64_t(i*i*sign));
-            break;
-        case 2:
-            table.set_mixed(11, i, "string");
-            break;
-        case 3:
-            table.set_mixed(11, i, DateTime(123456789));
-            break;
-        case 4:
-            table.set_mixed(11, i, BinaryData("binary", 7));
-            break;
-        case 5: {
-                    // Add subtable to mixed column
-                    // We can first set schema and contents when the entire
-                    // row has been inserted
-                    table.set_mixed(11, i, Mixed::subtable_tag());
-                    TableRef subtable = table.get_subtable(11, i);
-                    subtable->add_column(type_Int, "first");
-                    subtable->add_column(type_String, "second");
-                    for (size_t j = 0; j != 2; ++j) {
-                        subtable->insert_int(0, j, i*i*j*sign);
-                        subtable->insert_string(1, j, "mixed sub");
-                        subtable->insert_done();
-                    }
-                    break;
-        }
-        case 6:
-            table.set_mixed(11, i, float(123.1*i*sign));
-            break;
-        case 7:
-            table.set_mixed(11, i, double(987.65*i*sign));
-            break;
+            case 0:
+                table.set_mixed(11, i, false);
+                break;
+            case 1:
+                table.set_mixed(11, i, int64_t(i * i * sign));
+                break;
+            case 2:
+                table.set_mixed(11, i, "string");
+                break;
+            case 3:
+                table.set_mixed(11, i, OldDateTime(123456789));
+                break;
+            case 4:
+                table.set_mixed(11, i, BinaryData("binary", 7));
+                break;
+            case 5: {
+                // Add subtable to mixed column
+                // We can first set schema and contents when the entire
+                // row has been inserted
+                table.set_mixed(11, i, Mixed::subtable_tag());
+                TableRef subtable = table.get_subtable(11, i);
+                subtable->add_column(type_Int, "first");
+                subtable->add_column(type_String, "second");
+                for (size_t j = 0; j != 2; ++j) {
+                    subtable->insert_empty_row(j);
+                    subtable->set_int(0, j, i * i * j * sign);
+                    subtable->set_string(1, j, "mixed sub");
+                }
+                break;
+            }
+            case 6:
+                table.set_mixed(11, i, float(123.1 * i * sign));
+                break;
+            case 7:
+                table.set_mixed(11, i, double(987.65 * i * sign));
+                break;
         }
     }
 
-    // We also want a ColumnStringEnum
+    // We also want a StringEnumColumn
     table.optimize();
 }
 
-bool json_test(string json, string expected_file, bool generate)
+bool json_test(std::string json, std::string expected_file, bool generate)
 {
-    string file_name = get_test_resource_path();
+    std::string file_name = get_test_resource_path();
     file_name += expected_file + ".json";
 
     jsmn_parser p;
-    jsmntok_t *t = new jsmntok_t[10000];
+    jsmntok_t* t = new jsmntok_t[10000];
     jsmn_init(&p);
     int r = jsmn_parse(&p, json.c_str(), strlen(json.c_str()), t, 10000);
     delete[] t;
@@ -220,28 +238,28 @@ bool json_test(string json, string expected_file, bool generate)
         // Generate the testdata to compare. After doing this,
         // verify that the output is correct with a json validator:
         // http://jsonformatter.curiousconcept.com/
-        ofstream test_file(file_name.c_str(), ios::out | ios::binary);
+        std::ofstream test_file(file_name.c_str(), std::ios::out | std::ios::binary);
         test_file << json;
-        cerr << "\n----------------------------------------\n";
-        cerr << "Generated " << expected_file << ":\n";
-        cerr << json << "\n----------------------------------------\n";
+        std::cerr << "\n----------------------------------------\n";
+        std::cerr << "Generated " << expected_file << ":\n";
+        std::cerr << json << "\n----------------------------------------\n";
         return true;
     }
     else {
-        string expected;
-        ifstream test_file(file_name.c_str(), ios::in | ios::binary);
+        std::string expected;
+        std::ifstream test_file(file_name.c_str(), std::ios::in | std::ios::binary);
 
         // fixme, find a way to use CHECK from a function
-        if(!test_file.good())
+        if (!test_file.good())
             return false;
         if (test_file.fail())
             return false;
         getline(test_file, expected);
         if (json != expected) {
-            string path = "bad_" + file_name;
+            std::string path = "bad_" + file_name;
             File out(path, File::mode_Write);
             out.write(json);
-            cerr << "\n error result in '" << string(path) << "'\n";
+            std::cerr << "\n error result in '" << std::string(path) << "'\n";
             return false;
         }
         return true;
@@ -254,7 +272,7 @@ TEST(Json_NoLinks)
     Table table;
     setup_multi_table(table, 15, 2);
 
-    stringstream ss;
+    std::stringstream ss;
     table.to_json(ss);
     CHECK(json_test(ss.str(), "expect_json", false));
 
@@ -337,7 +355,7 @@ TEST(Json_LinkList1)
     links1->add(0);
     links1->add(2);
 
-    stringstream ss;
+    std::stringstream ss;
 
     // Now try different link_depth arguments
     table1->to_json(ss);
@@ -360,7 +378,7 @@ TEST(Json_LinkList1)
     CHECK(json_test(ss.str(), "expected_json_linklist1_5", generate_all));
 
     // Column and table renaming
-    map<string, string> m;
+    std::map<std::string, std::string> m;
     m["str1"] = "STR1";
     m["linkA"] = "LINKA";
     m["table1"] = "TABLE1";
@@ -403,7 +421,7 @@ TEST(Json_LinkListCycle)
 
     // create json
 
-    stringstream ss;
+    std::stringstream ss;
 
     // Now try different link_depth arguments
     table1->to_json(ss);
@@ -428,7 +446,6 @@ TEST(Json_LinkListCycle)
     ss.str("");
     table1->to_json(ss, 3);
     CHECK(json_test(ss.str(), "expected_json_linklist_cycle6", generate_all));
-
 }
 
 TEST(Json_LinkCycles)
@@ -457,7 +474,7 @@ TEST(Json_LinkCycles)
     table1->set_link(col_link1, 0, 0);
     table2->set_link(col_link2, 0, 0);
 
-    stringstream ss;
+    std::stringstream ss;
 
     // Now try different link_depth arguments
     table1->to_json(ss);

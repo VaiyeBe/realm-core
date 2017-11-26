@@ -1,17 +1,32 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "testsettings.hpp"
 #ifdef TEST_ARRAY_STRING
 
-#include <vector>
-
-#include <tightdb/array_string.hpp>
-#include <tightdb/column.hpp>
+#include <realm/array_string.hpp>
+#include <realm/column.hpp>
 
 #include "test.hpp"
 
-using namespace std;
-using namespace tightdb;
-using namespace tightdb::util;
-using namespace tightdb::test_util;
+using namespace realm;
+using namespace realm::test_util;
+
 
 // Test independence and thread-safety
 // -----------------------------------
@@ -41,6 +56,7 @@ using namespace tightdb::test_util;
 // Another way to debug a particular test, is to copy that test into
 // `experiments/testcase.cpp` and then run `sh build.sh
 // check-testcase` (or one of its friends) from the command line.
+
 
 TEST(ArrayString_Basic)
 {
@@ -184,7 +200,7 @@ TEST(ArrayString_Basic)
     // TEST(ArrayString_Add1)
 
     c.add("a");
-    CHECK_EQUAL("",  c.get(0));
+    CHECK_EQUAL("", c.get(0));
     CHECK_EQUAL("a", c.get(1));
     CHECK_EQUAL(2, c.size());
 
@@ -192,8 +208,8 @@ TEST(ArrayString_Basic)
     // TEST(ArrayString_Add2)
 
     c.add("bb");
-    CHECK_EQUAL("",   c.get(0));
-    CHECK_EQUAL("a",  c.get(1));
+    CHECK_EQUAL("", c.get(0));
+    CHECK_EQUAL("a", c.get(1));
     CHECK_EQUAL("bb", c.get(2));
     CHECK_EQUAL(3, c.size());
 
@@ -201,9 +217,9 @@ TEST(ArrayString_Basic)
     // TEST(ArrayString_Add3)
 
     c.add("ccc");
-    CHECK_EQUAL("",    c.get(0));
-    CHECK_EQUAL("a",   c.get(1));
-    CHECK_EQUAL("bb",  c.get(2));
+    CHECK_EQUAL("", c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("bb", c.get(2));
     CHECK_EQUAL("ccc", c.get(3));
     CHECK_EQUAL(4, c.size());
 
@@ -211,10 +227,10 @@ TEST(ArrayString_Basic)
     // TEST(ArrayString_Add4)
 
     c.add("dddd");
-    CHECK_EQUAL("",     c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("bb",   c.get(2));
-    CHECK_EQUAL("ccc",  c.get(3));
+    CHECK_EQUAL("", c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("bb", c.get(2));
+    CHECK_EQUAL("ccc", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL(5, c.size());
 
@@ -222,10 +238,10 @@ TEST(ArrayString_Basic)
     // TEST(ArrayString_Add8)
 
     c.add("eeeeeeee");
-    CHECK_EQUAL("",     c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("bb",   c.get(2));
-    CHECK_EQUAL("ccc",  c.get(3));
+    CHECK_EQUAL("", c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("bb", c.get(2));
+    CHECK_EQUAL("ccc", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL("eeeeeeee", c.get(5));
     CHECK_EQUAL(6, c.size());
@@ -234,10 +250,10 @@ TEST(ArrayString_Basic)
     // TEST(ArrayString_Add16)
 
     c.add("ffffffffffffffff");
-    CHECK_EQUAL("",     c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("bb",   c.get(2));
-    CHECK_EQUAL("ccc",  c.get(3));
+    CHECK_EQUAL("", c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("bb", c.get(2));
+    CHECK_EQUAL("ccc", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL("eeeeeeee", c.get(5));
     CHECK_EQUAL("ffffffffffffffff", c.get(6));
@@ -248,10 +264,10 @@ TEST(ArrayString_Basic)
 
     c.add("gggggggggggggggggggggggggggggggg");
 
-    CHECK_EQUAL("",     c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("bb",   c.get(2));
-    CHECK_EQUAL("ccc",  c.get(3));
+    CHECK_EQUAL("", c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("bb", c.get(2));
+    CHECK_EQUAL("ccc", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL("eeeeeeee", c.get(5));
     CHECK_EQUAL("ffffffffffffffff", c.get(6));
@@ -266,10 +282,10 @@ TEST(ArrayString_Basic)
     c.set(2, "a");
     c.set(3, "");
 
-    CHECK_EQUAL("ccc",  c.get(0));
-    CHECK_EQUAL("bb",   c.get(1));
-    CHECK_EQUAL("a",    c.get(2));
-    CHECK_EQUAL("",     c.get(3));
+    CHECK_EQUAL("ccc", c.get(0));
+    CHECK_EQUAL("bb", c.get(1));
+    CHECK_EQUAL("a", c.get(2));
+    CHECK_EQUAL("", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL("eeeeeeee", c.get(5));
     CHECK_EQUAL("ffffffffffffffff", c.get(6));
@@ -282,11 +298,11 @@ TEST(ArrayString_Basic)
     // Insert in middle
     c.insert(4, "xx");
 
-    CHECK_EQUAL("ccc",  c.get(0));
-    CHECK_EQUAL("bb",   c.get(1));
-    CHECK_EQUAL("a",    c.get(2));
-    CHECK_EQUAL("",     c.get(3));
-    CHECK_EQUAL("xx",   c.get(4));
+    CHECK_EQUAL("ccc", c.get(0));
+    CHECK_EQUAL("bb", c.get(1));
+    CHECK_EQUAL("a", c.get(2));
+    CHECK_EQUAL("", c.get(3));
+    CHECK_EQUAL("xx", c.get(4));
     CHECK_EQUAL("dddd", c.get(5));
     CHECK_EQUAL("eeeeeeee", c.get(6));
     CHECK_EQUAL("ffffffffffffffff", c.get(7));
@@ -299,11 +315,11 @@ TEST(ArrayString_Basic)
     // Erase from end
     c.erase(8);
 
-    CHECK_EQUAL("ccc",  c.get(0));
-    CHECK_EQUAL("bb",   c.get(1));
-    CHECK_EQUAL("a",    c.get(2));
-    CHECK_EQUAL("",     c.get(3));
-    CHECK_EQUAL("xx",   c.get(4));
+    CHECK_EQUAL("ccc", c.get(0));
+    CHECK_EQUAL("bb", c.get(1));
+    CHECK_EQUAL("a", c.get(2));
+    CHECK_EQUAL("", c.get(3));
+    CHECK_EQUAL("xx", c.get(4));
     CHECK_EQUAL("dddd", c.get(5));
     CHECK_EQUAL("eeeeeeee", c.get(6));
     CHECK_EQUAL("ffffffffffffffff", c.get(7));
@@ -315,10 +331,10 @@ TEST(ArrayString_Basic)
     // Erase from top
     c.erase(0);
 
-    CHECK_EQUAL("bb",   c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("",     c.get(2));
-    CHECK_EQUAL("xx",   c.get(3));
+    CHECK_EQUAL("bb", c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("", c.get(2));
+    CHECK_EQUAL("xx", c.get(3));
     CHECK_EQUAL("dddd", c.get(4));
     CHECK_EQUAL("eeeeeeee", c.get(5));
     CHECK_EQUAL("ffffffffffffffff", c.get(6));
@@ -330,9 +346,9 @@ TEST(ArrayString_Basic)
     // Erase from middle
     c.erase(3);
 
-    CHECK_EQUAL("bb",   c.get(0));
-    CHECK_EQUAL("a",    c.get(1));
-    CHECK_EQUAL("",     c.get(2));
+    CHECK_EQUAL("bb", c.get(0));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("", c.get(2));
     CHECK_EQUAL("dddd", c.get(3));
     CHECK_EQUAL("eeeeeeee", c.get(4));
     CHECK_EQUAL("ffffffffffffffff", c.get(5));
@@ -366,10 +382,10 @@ TEST(ArrayString_Basic)
     c.insert(0, "xxxxx");
 
     CHECK_EQUAL("xxxxx", c.get(0));
-    CHECK_EQUAL("a",     c.get(1));
-    CHECK_EQUAL("b",     c.get(2));
-    CHECK_EQUAL("c",     c.get(3));
-    CHECK_EQUAL("d",     c.get(4));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("b", c.get(2));
+    CHECK_EQUAL("c", c.get(3));
+    CHECK_EQUAL("d", c.get(4));
     CHECK_EQUAL(5, c.size());
 
 
@@ -379,11 +395,11 @@ TEST(ArrayString_Basic)
     c.insert(3, "xxxxxxxxxx");
 
     CHECK_EQUAL("xxxxx", c.get(0));
-    CHECK_EQUAL("a",     c.get(1));
-    CHECK_EQUAL("b",     c.get(2));
+    CHECK_EQUAL("a", c.get(1));
+    CHECK_EQUAL("b", c.get(2));
     CHECK_EQUAL("xxxxxxxxxx", c.get(3));
-    CHECK_EQUAL("c",     c.get(4));
-    CHECK_EQUAL("d",     c.get(5));
+    CHECK_EQUAL("c", c.get(4));
+    CHECK_EQUAL("d", c.get(5));
     CHECK_EQUAL(6, c.size());
 
 
@@ -440,8 +456,8 @@ TEST(ArrayString_Basic)
 
     c.clear();
 
-    ref_type results_ref = Column::create(Allocator::get_default());
-    Column results(Allocator::get_default(), results_ref);
+    ref_type results_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn results(Allocator::get_default(), results_ref);
 
     // first, middle and end
     c.add("foobar");
@@ -478,9 +494,9 @@ TEST(ArrayString_Basic)
 
     c.clear();
 
-    const char buf_1[] = { 'a', 0, 'b', 0, 'c' };
-    const char buf_2[] = { 0, 'a', 0, 'b', 0 };
-    const char buf_3[] = { 0, 0, 0, 0, 0 };
+    const char buf_1[] = {'a', 0, 'b', 0, 'c'};
+    const char buf_2[] = {0, 'a', 0, 'b', 0};
+    const char buf_3[] = {0, 0, 0, 0, 0};
 
     c.add(StringData(buf_1, sizeof buf_1));
     c.add(StringData(buf_2, sizeof buf_2));
@@ -504,17 +520,28 @@ TEST(ArrayString_Basic)
 TEST(ArrayString_Null)
 {
     {
-        ArrayString a(Allocator::get_default());
+        ArrayString a(Allocator::get_default(), true);
+        a.create();
+
+        a.add("");
+        size_t t = a.find_first("");
+        CHECK_EQUAL(t, 0);
+
+        a.destroy();
+    }
+
+    {
+        ArrayString a(Allocator::get_default(), true);
         a.create();
 
         a.add("foo");
         a.add("");
-        a.add(StringData(0, 0)); // add null (StringData::data() == 0)
-        
+        a.add(realm::null());
+
         CHECK_EQUAL(a.is_null(0), false);
         CHECK_EQUAL(a.is_null(1), false);
         CHECK_EQUAL(a.is_null(2), true);
-        CHECK_EQUAL(memcmp(a.get(0).data(), "foo", 3), 0);
+        CHECK(a.get(0) == "foo");
 
         // Test set
         a.set_null(0);
@@ -528,22 +555,22 @@ TEST(ArrayString_Null)
     }
 
     {
-        ArrayString a(Allocator::get_default());
+        ArrayString a(Allocator::get_default(), true);
         a.create();
 
-        a.add(StringData(0, 0));  // add null (StringData::data() == 0)
+        a.add(realm::null());
         a.add("");
         a.add("foo");
 
         CHECK_EQUAL(a.is_null(0), true);
         CHECK_EQUAL(a.is_null(1), false);
         CHECK_EQUAL(a.is_null(2), false);
-        CHECK_EQUAL(memcmp(a.get(2).data(), "foo", 3), 0);
+        CHECK(a.get(2) == "foo");
 
         // Test insert
-        a.insert(0, StringData(0, 0)); // add null (StringData::data() == 0)
-        a.insert(2, StringData(0, 0)); // add null (StringData::data() == 0)
-        a.insert(4, StringData(0, 0)); // add null (StringData::data() == 0)
+        a.insert(0, realm::null());
+        a.insert(2, realm::null());
+        a.insert(4, realm::null());
 
         CHECK_EQUAL(a.is_null(0), true);
         CHECK_EQUAL(a.is_null(1), true);
@@ -556,17 +583,17 @@ TEST(ArrayString_Null)
     }
 
     {
-        ArrayString a(Allocator::get_default());
+        ArrayString a(Allocator::get_default(), true);
         a.create();
 
         a.add("");
-        a.add(StringData(0, 0));
+        a.add(realm::null());
         a.add("foo");
 
         CHECK_EQUAL(a.is_null(0), false);
         CHECK_EQUAL(a.is_null(1), true);
         CHECK_EQUAL(a.is_null(2), false);
-        CHECK_EQUAL(memcmp(a.get(2).data(), "foo", 3), 0);
+        CHECK(a.get(2) == "foo");
 
         a.erase(0);
         CHECK_EQUAL(a.is_null(0), true);
@@ -581,46 +608,47 @@ TEST(ArrayString_Null)
     Random random(random_int<unsigned long>());
 
     for (size_t t = 0; t < 50; t++) {
-        ArrayString a(Allocator::get_default());
+        ArrayString a(Allocator::get_default(), true);
         a.create();
 
         // vector that is kept in sync with the ArrayString so that we can compare with it
-        vector<string> v;
+        std::vector<std::string> v;
 
         // ArrayString capacity starts at 128 bytes, so we need lots of elements
         // to test if relocation works
         for (size_t i = 0; i < 100; i++) {
-            unsigned char rnd = random.draw_int<unsigned char>();  //    = 1234 * ((i + 123) * (t + 432) + 423) + 543;
+            unsigned char rnd = static_cast<unsigned char>(
+                random.draw_int<unsigned int>()); //    = 1234 * ((i + 123) * (t + 432) + 423) + 543;
 
             // Add more often than removing, so that we grow
-            if (rnd < 80 && a.size() > 0) {                
+            if (rnd < 80 && a.size() > 0) {
                 size_t del = rnd % a.size();
                 a.erase(del);
                 v.erase(v.begin() + del);
             }
             else {
-                // Generate string with good probability of being empty or null
-                static const char str[] = "This is a test of null strings";
+                // Generate string with good probability of being empty or realm::null()
+                static const char str[] = "This is a test of realm::null() strings";
                 size_t len;
-                
-                if (random.draw_int<unsigned char>() > 100)
+
+                if (random.draw_int<int>() > 100)
                     len = rnd % 15;
                 else
                     len = 0;
 
                 StringData sd;
-                string stdstr;
+                std::string stdstr;
 
-                if (random.draw_int<unsigned char>() > 100) {
-                    sd = StringData(0, 0);
-                    stdstr = "null";
+                if (random.draw_int<int>() > 100) {
+                    sd = realm::null();
+                    stdstr = "realm::null()";
                 }
                 else {
                     sd = StringData(str, len);
-                    stdstr = string(str, len);
+                    stdstr = std::string(str, len);
                 }
 
-                if (random.draw_int<unsigned char>() > 100) {
+                if (random.draw_int<int>() > 100) {
                     a.add(sd);
                     v.push_back(stdstr);
                 }
@@ -631,13 +659,13 @@ TEST(ArrayString_Null)
                 }
 
                 CHECK_EQUAL(a.size(), v.size());
-                for (size_t i = 0; i < a.size(); i++) {
-                    if (v[i] == "null") {
-                        CHECK(a.is_null(i));
-                        CHECK(a.get(i).data() == 0);
+                for (size_t a_i = 0; a_i < a.size(); a_i++) {
+                    if (v[a_i] == "realm::null()") {
+                        CHECK(a.is_null(a_i));
+                        CHECK(a.get(a_i).data() == nullptr);
                     }
                     else {
-                        CHECK(a.get(i) == v[i]);
+                        CHECK(a.get(a_i) == v[a_i]);
                     }
                 }
             }
@@ -663,6 +691,67 @@ TEST(ArrayString_Compare)
 
     a.destroy();
     b.destroy();
+}
+
+// Some internal testing for backwards compatibility between database file version 2 and 3
+TEST(ArrayString_Null2)
+{
+    {
+        ArrayString a(Allocator::get_default()), b(Allocator::get_default(), false);
+        a.create();
+        b.create();
+
+        // Keeps width = 0
+        a.add("");
+
+        // Now add an "a" which will relocate the array and initialize the trailing width-byte of the empty string
+        // (see array_string.hpp header) to the same value as m_width (which is 2). For a nullable column, that would
+        // indicate that a[0] == null. But we're not nullable, so the following get(0) should not return null.
+        a.add("a");
+
+        StringData sd = a.get(0);
+        CHECK(!sd.is_null());
+        CHECK_EQUAL(a.find_first(""), 0);
+
+        a.destroy();
+        b.destroy();
+    }
+
+    // Same as above test, but for a nullable column
+    {
+        ArrayString a(Allocator::get_default()), b(Allocator::get_default(), true);
+        a.create();
+        b.create();
+
+        // Keeps width = 0
+        a.add("");
+
+        // Now add an "a" which will relocate the array. In this case the column is nullable, so it should not flag
+        // the empty string as being null during relocation (width expansion)
+        a.add("a");
+
+        StringData sd = a.get(0);
+        CHECK(!sd.is_null());
+
+        a.destroy();
+        b.destroy();
+    }
+
+    {
+        ArrayString a(Allocator::get_default()), b(Allocator::get_default(), false);
+        a.create();
+        b.create();
+
+        // Keeps width = 0
+        a.add("");
+
+        StringData sd = a.get(0);
+        CHECK(!sd.is_null());
+        CHECK_EQUAL(a.find_first(""), 0);
+
+        a.destroy();
+        b.destroy();
+    }
 }
 
 

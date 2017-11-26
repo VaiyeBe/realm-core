@@ -1,12 +1,32 @@
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
+
 #include "testsettings.hpp"
 #ifdef TEST_ARRAY_STRING_LONG
 
-#include <tightdb/array_string_long.hpp>
+#include <vector>
 
+#include <realm/array_string_long.hpp>
 #include "test.hpp"
 
-using namespace tightdb;
-
+using namespace realm;
+using namespace realm::util;
+using namespace realm::test_util;
 
 // Test independence and thread-safety
 // -----------------------------------
@@ -38,9 +58,24 @@ using namespace tightdb;
 // check-testcase` (or one of its friends) from the command line.
 
 
-TEST(ArrayStringLong_Basic)
+namespace {
+
+struct nullable {
+    static constexpr bool value = true;
+};
+
+struct non_nullable {
+    static constexpr bool value = false;
+};
+
+} // anonymous namespace
+
+
+TEST_TYPES(ArrayStringLong_Basic, non_nullable, nullable)
 {
-    ArrayStringLong c(Allocator::get_default());
+    constexpr bool nullable = TEST_TYPE::value;
+
+    ArrayStringLong c(Allocator::get_default(), nullable);
     c.create();
 
     // TEST(ArrayStringLong_MultiEmpty)
@@ -84,7 +119,7 @@ TEST(ArrayStringLong_Basic)
     CHECK_EQUAL("abc", c.get(0)); // single
     CHECK_EQUAL(1, c.size());
 
-    c.add("defg"); //non-empty
+    c.add("defg"); // non-empty
     CHECK_EQUAL("abc", c.get(0));
     CHECK_EQUAL("defg", c.get(1));
     CHECK_EQUAL(2, c.size());
@@ -251,6 +286,179 @@ TEST(ArrayStringLong_Basic)
     // TEST(ArrayStringLong_Destroy)
 
     c.destroy();
+}
+
+
+TEST(ArrayStringLong_Null)
+{
+
+    {
+        ArrayStringLong a(Allocator::get_default(), true);
+        a.create();
+
+        a.add("foo");
+        a.add("");
+        a.add(realm::null());
+
+        CHECK_EQUAL(a.is_null(0), false);
+        CHECK_EQUAL(a.is_null(1), false);
+        CHECK_EQUAL(a.is_null(2), true);
+        CHECK(a.get(0) == "foo");
+
+        // Test set
+        a.set_null(0);
+        a.set_null(1);
+        a.set_null(2);
+        CHECK_EQUAL(a.is_null(1), true);
+        CHECK_EQUAL(a.is_null(0), true);
+        CHECK_EQUAL(a.is_null(2), true);
+
+        a.destroy();
+    }
+
+    {
+        ArrayStringLong a(Allocator::get_default(), true);
+        a.create();
+
+        a.add(realm::null());
+        a.add("");
+        a.add("foo");
+
+        CHECK_EQUAL(a.is_null(0), true);
+        CHECK_EQUAL(a.is_null(1), false);
+        CHECK_EQUAL(a.is_null(2), false);
+        CHECK(a.get(2) == "foo");
+
+        // Test insert
+        a.insert(0, realm::null());
+        a.insert(2, realm::null());
+        a.insert(4, realm::null());
+
+        CHECK_EQUAL(a.is_null(0), true);
+        CHECK_EQUAL(a.is_null(1), true);
+        CHECK_EQUAL(a.is_null(2), true);
+        CHECK_EQUAL(a.is_null(3), false);
+        CHECK_EQUAL(a.is_null(4), true);
+        CHECK_EQUAL(a.is_null(5), false);
+
+        a.destroy();
+    }
+
+    {
+        ArrayStringLong a(Allocator::get_default(), true);
+        a.create();
+
+        a.add("");
+        a.add(realm::null());
+        a.add("foo");
+
+        CHECK_EQUAL(a.is_null(0), false);
+        CHECK_EQUAL(a.is_null(1), true);
+        CHECK_EQUAL(a.is_null(2), false);
+        CHECK(a.get(2) == "foo");
+
+
+        a.erase(0);
+        CHECK_EQUAL(a.is_null(0), true);
+        CHECK_EQUAL(a.is_null(1), false);
+
+        a.erase(0);
+        CHECK_EQUAL(a.is_null(0), false);
+
+        a.destroy();
+    }
+
+    {
+        ArrayStringLong a(Allocator::get_default(), false);
+        a.create();
+
+        a.add("");
+        a.add("foo");
+
+        CHECK_EQUAL(a.is_null(0), false);
+        CHECK_EQUAL(a.get(0), "");
+        CHECK_EQUAL(a.is_null(1), false);
+
+        a.destroy();
+    }
+
+    {
+        ArrayStringLong a(Allocator::get_default(), false);
+        a.create();
+
+        a.add("");
+
+        CHECK_EQUAL(a.is_null(0), false);
+        CHECK_EQUAL(a.get(0), "");
+
+        a.destroy();
+    }
+
+    Random random(random_int<unsigned long>());
+
+    for (size_t t = 0; t < 2; t++) {
+        ArrayStringLong a(Allocator::get_default(), true);
+        a.create();
+
+        // vector that is kept in sync with the ArrayString so that we can compare with it
+        std::vector<std::string> v;
+
+        for (size_t i = 0; i < 2000; i++) {
+            unsigned char rnd = static_cast<unsigned char>(
+                random.draw_int<unsigned int>()); //    = 1234 * ((i + 123) * (t + 432) + 423) + 543;
+
+            // Add more often than removing, so that we grow
+            if (rnd < 80 && a.size() > 0) {
+                size_t del = rnd % a.size();
+                a.erase(del);
+                v.erase(v.begin() + del);
+            }
+            else {
+                // Generate string with good probability of being empty or realm::null()
+                static const char str[] = "This is a test of realm::null() strings";
+                size_t len;
+
+                if (random.draw_int<int>() > 100)
+                    len = rnd % 15;
+                else
+                    len = 0;
+
+                StringData sd;
+                std::string stdstr;
+
+                if (random.draw_int<int>() > 100) {
+                    sd = realm::null();
+                    stdstr = "realm::null()";
+                }
+                else {
+                    sd = StringData(str, len);
+                    stdstr = std::string(str, len);
+                }
+
+                if (random.draw_int<int>() > 100) {
+                    a.add(sd);
+                    v.push_back(stdstr);
+                }
+                else if (a.size() > 0) {
+                    size_t pos = rnd % a.size();
+                    a.insert(pos, sd);
+                    v.insert(v.begin() + pos, stdstr);
+                }
+
+                CHECK_EQUAL(a.size(), v.size());
+                for (size_t a_i = 0; a_i < a.size(); a_i++) {
+                    if (v[a_i] == "realm::null()") {
+                        CHECK(a.is_null(a_i));
+                        CHECK(a.get(a_i).data() == nullptr);
+                    }
+                    else {
+                        CHECK(a.get(a_i) == v[a_i]);
+                    }
+                }
+            }
+        }
+        a.destroy();
+    }
 }
 
 #endif // TEST_ARRAY_STRING_LONG

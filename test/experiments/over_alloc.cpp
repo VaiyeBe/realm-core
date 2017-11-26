@@ -1,15 +1,31 @@
-#include <iostream>
-#include <tightdb.hpp>
-#include <tightdb/group_shared.hpp>
-#include <tightdb/util/file.hpp>
+/*************************************************************************
+ *
+ * Copyright 2016 Realm Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ **************************************************************************/
 
-using namespace tightdb;
-using namespace std;
+#include <iostream>
+#include <realm.hpp>
+#include <realm/group_shared.hpp>
+#include <realm/util/file.hpp>
+
+using namespace realm;
 
 namespace {
 
-TIGHTDB_TABLE_1(MyTable,
-                text, String)
+REALM_TABLE_1(MyTable, text, String)
 
 } // namespace
 
@@ -24,16 +40,17 @@ int main()
 
     // Many transactions
     {
-        File::try_remove("over_alloc_1.tightdb");
-        File::try_remove("over_alloc_1.tightdb.lock");
-        SharedGroup db("over_alloc_1.tightdb");
-        if (!db.is_valid()) throw runtime_error("Failed to open database 1");
+        File::try_remove("over_alloc_1.realm");
+        File::try_remove("over_alloc_1.realm.lock");
+        SharedGroup db("over_alloc_1.realm");
+        if (!db.is_valid())
+            throw runtime_error("Failed to open database 1");
 
-        for (int i=0; i<n_outer; ++i) {
+        for (int i = 0; i < n_outer; ++i) {
             {
                 Group& group = db.begin_write();
                 MyTable::Ref table = group.get_table<MyTable>("my_table");
-                for (int j=0; j<n_inner; ++j) {
+                for (int j = 0; j < n_inner; ++j) {
                     table->add("x");
                 }
             }
@@ -43,16 +60,17 @@ int main()
 
     // One transaction
     {
-        File::try_remove("over_alloc_2.tightdb");
-        File::try_remove("over_alloc_2.tightdb.lock");
-        SharedGroup db("over_alloc_2.tightdb");
-        if (!db.is_valid()) throw runtime_error("Failed to open database 2");
+        File::try_remove("over_alloc_2.realm");
+        File::try_remove("over_alloc_2.realm.lock");
+        SharedGroup db("over_alloc_2.realm");
+        if (!db.is_valid())
+            throw runtime_error("Failed to open database 2");
 
         {
             Group& group = db.begin_write();
             MyTable::Ref table = group.get_table<MyTable>("my_table");
-            for (int i=0; i<n_outer; ++i) {
-                for (int j=0; j<n_inner; ++j) {
+            for (int i = 0; i < n_outer; ++i) {
+                for (int j = 0; j < n_inner; ++j) {
                     table->add("x");
                 }
             }

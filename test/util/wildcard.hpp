@@ -1,34 +1,33 @@
 /*************************************************************************
  *
- * TIGHTDB CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] TightDB Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of TightDB Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to TightDB Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from TightDB Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
-#ifndef TIGHTDB_TEST_UTIL_WILDCARD_HPP
-#define TIGHTDB_TEST_UTIL_WILDCARD_HPP
+
+#ifndef REALM_TEST_UTIL_WILDCARD_HPP
+#define REALM_TEST_UTIL_WILDCARD_HPP
 
 #include <cstddef>
 #include <cstring>
 #include <string>
 #include <vector>
 
-#include <tightdb/util/features.h>
+#include <realm/util/features.h>
 
 
-namespace tightdb {
+namespace realm {
 namespace test_util {
 
 
@@ -36,16 +35,16 @@ class wildcard_pattern {
 public:
     explicit wildcard_pattern(const std::string& text);
 
-    bool match(const char* begin, const char* end) const TIGHTDB_NOEXCEPT;
+    bool match(const char* begin, const char* end) const noexcept;
 
-    bool match(const char* c_str) const TIGHTDB_NOEXCEPT;
+    bool match(const char* c_str) const noexcept;
 
 private:
     std::string m_text;
 
     struct card {
-        std::size_t m_offset, m_size;
-        card(std::size_t begin, std::size_t end) TIGHTDB_NOEXCEPT;
+        size_t m_offset, m_size;
+        card(size_t begin, size_t end) noexcept;
     };
 
     // Must contain at least one card. The first, and the last card
@@ -58,24 +57,23 @@ private:
 };
 
 
-
 // Implementation
 
-inline bool wildcard_pattern::match(const char* c_str) const TIGHTDB_NOEXCEPT
+inline bool wildcard_pattern::match(const char* c_str) const noexcept
 {
     const char* begin = c_str;
-    const char* end   = begin + std::strlen(c_str);
+    const char* end = begin + std::strlen(c_str);
     return match(begin, end);
 }
 
-inline wildcard_pattern::card::card(std::size_t begin, std::size_t end) TIGHTDB_NOEXCEPT
+inline wildcard_pattern::card::card(size_t begin, size_t end) noexcept
 {
     m_offset = begin;
-    m_size   = end - begin;
+    m_size = end - begin;
 }
 
 
 } // namespace test_util
-} // namespace tightdb
+} // namespace realm
 
-#endif // TIGHTDB_TEST_UTIL_WILDCARD_HPP
+#endif // REALM_TEST_UTIL_WILDCARD_HPP

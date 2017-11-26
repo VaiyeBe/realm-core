@@ -1,38 +1,33 @@
 /*************************************************************************
  *
- * TIGHTDB CONFIDENTIAL
- * __________________
+ * Copyright 2016 Realm Inc.
  *
- *  [2011] - [2012] TightDB Inc
- *  All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * NOTICE:  All information contained herein is, and remains
- * the property of TightDB Incorporated and its suppliers,
- * if any.  The intellectual and technical concepts contained
- * herein are proprietary to TightDB Incorporated
- * and its suppliers and may be covered by U.S. and Foreign Patents,
- * patents in process, and are protected by trade secret or copyright law.
- * Dissemination of this information or reproduction of this material
- * is strictly forbidden unless prior written permission is obtained
- * from TightDB Incorporated.
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  **************************************************************************/
-#ifndef TIGHTDB_TEST_UTIL_VERIFIED_INTEGER_HPP
-#define TIGHTDB_TEST_UTIL_VERIFIED_INTEGER_HPP
+
+#ifndef REALM_TEST_UTIL_VERIFIED_INTEGER_HPP
+#define REALM_TEST_UTIL_VERIFIED_INTEGER_HPP
 
 #include <cstddef>
 #include <vector>
 
-#ifdef _WIN32
-#  include <win32\stdint.h>
-#endif
-
-#include <tightdb/array.hpp>
-#include <tightdb/column.hpp>
+#include <realm/array.hpp>
+#include <realm/column.hpp>
 
 #include "random.hpp"
 
-namespace tightdb {
+namespace realm {
 namespace test_util {
 
 
@@ -41,41 +36,40 @@ public:
     VerifiedInteger(Random&);
     ~VerifiedInteger();
     void add(int64_t value);
-    void insert(std::size_t ndx, int64_t value);
-    void insert(std::size_t ndx, const char *value);
-    int64_t get(std::size_t ndx);
-    void set(std::size_t ndx, int64_t value);
-    void erase(std::size_t ndx);
+    void insert(size_t ndx, int64_t value);
+    void insert(size_t ndx, const char* value);
+    int64_t get(size_t ndx);
+    void set(size_t ndx, int64_t value);
+    void erase(size_t ndx);
     void clear();
     size_t find_first(int64_t value);
-    void find_all(Column &c, int64_t value, std::size_t start = 0, std::size_t end = -1);
-    std::size_t size();
-    int64_t sum(std::size_t start = 0, std::size_t end = -1);
-    int64_t maximum(std::size_t start = 0, std::size_t end = -1);
-    int64_t minimum(std::size_t start = 0, std::size_t end = -1);
-    bool Verify();
+    void find_all(IntegerColumn& c, int64_t value, size_t start = 0, size_t end = -1);
+    size_t size();
+    int64_t sum(size_t start = 0, size_t end = -1);
+    int64_t maximum(size_t start = 0, size_t end = -1);
+    int64_t minimum(size_t start = 0, size_t end = -1);
+    bool verify();
     bool occasional_verify();
-    void verify_neighbours(std::size_t ndx);
+    void verify_neighbours(size_t ndx);
 
 private:
     std::vector<int64_t> v;
-    Column u;
+    IntegerColumn u;
     Random& m_random;
 };
 
 
-
 // Implementation
 
-inline VerifiedInteger::VerifiedInteger(Random& random):
-    u(Column::unattached_root_tag(), Allocator::get_default()),
-    m_random(random)
+inline VerifiedInteger::VerifiedInteger(Random& random)
+    : u(IntegerColumn::unattached_root_tag(), Allocator::get_default())
+    , m_random(random)
 {
     u.get_root_array()->create(Array::type_Normal); // Throws
 }
 
 
 } // namespace test_util
-} // namespace tightdb
+} // namespace realm
 
-#endif // TIGHTDB_TEST_UTIL_VERIFIED_INTEGER_HPP
+#endif // REALM_TEST_UTIL_VERIFIED_INTEGER_HPP
