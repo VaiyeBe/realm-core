@@ -1,3 +1,495 @@
+# NEXT RELEASE
+
+### Bugfixes
+
+* Lorem ipsum.
+
+### Breaking changes
+
+* Lorem ipsum.
+
+### Enhancements
+
+* Lorem ipsum.
+
+-----------
+
+### Internals
+
+* Lorem ipsum.
+
+----------------------------------------------
+
+# 4.0.4 Release notes
+
+### Bugfixes
+
+* Publish the release version of Android-armeabi-v7a binary.
+
+----------------------------------------------
+
+# 4.0.3 Release notes
+
+### Bugfixes
+
+* Switch from using a combination of file write and mmap to using only mmap when
+  initializing the lockfile. It is unclear if this counts as a bugfix, because
+  it is unclear if there are still systems out there with problems handling that
+  scenario. The hope is that it will fix some non-reproducible problems related to
+  lockfile initialization.
+  PR [#2902](https://github.com/realm/realm-core/pull/2902)
+* Make calls to posix_fallocate() robust against interruption and report
+  the correct error on failure.
+  PR [#2905](https://github.com/realm/realm-core/pull/2905).
+* Fix an error in `int_multiply_with_overflow_detect()` which would report
+  overflow when no overflow should occur. This could cause out of memory
+  exceptions when the `TransactLogParser` reads strings or binary data > 2GB.
+  PR [#2906](https://github.com/realm/realm-core/pull/2906).
+
+----------------------------------------------
+
+# 4.0.2 Release notes
+
+### Bugfixes
+
+* Fix a race between SharedGroup::compact() and SharedGroup::open(). The race could
+  cause asserts indicating file corruption even if no corruption is caused. It is also
+  possible that it could cause real file corruption, though that is much less likely.
+  PR [#2892](https://github.com/realm/realm-core/pull/2892)
+
+----------------------------------------------
+
+# 4.0.1 Release notes
+
+### Bugfixes
+
+* Fix case insensitive contains query for null strings not returning all results and
+  Fix case insensitive equals query for null strings returning nothing when null strings exist.
+  PR [#2871](https://github.com/realm/realm-core/pull/2871).
+* Added mentioning of bugfix #2853 to this file for Core 4.0.0. (see 4.0.0 below)
+  The mentioning of this fix for 4.0 was originally ommitted.
+
+----------------------------------------------
+
+# 4.0.0 Release notes
+
+### Bugfixes
+
+* Fix a bug in subtable management which caused crashes if a subtable was destroyed
+  on a different thread.
+  PR [#2855](https://github.com/realm/realm-core/pull/2855).
+* Fix corruption caused by `swap_rows()` and `move_column()` operations applied
+  to a StringEnumColumn. Currently unused by bindings.
+  PR [#2780](https://github.com/realm/realm-core/pull/2780).
+
+### Breaking changes
+
+* Add `Table::move_row()`.
+  PR [#2873](https://github.com/realm/realm-core/pull/2873).
+* Changing instruction values for `Table::move_row()` requires a version bump to 9.
+  Version 8 files in read only mode without any history can be opened without upgrading.
+  PR [#2877](https://github.com/realm/realm-core/pull/2877).
+
+### Enhancements
+
+* Add method to recursively delete an object tree
+  PR [#2752](https://github.com/realm/realm-core/pull/2752)
+  Issue [#2718](https://github.com/realm/realm-core/issues/2718)
+* Add method to safely delete or otherwise manipulate realm file
+  and management files.
+  PR [#2864](https://github.com/realm/realm-core/pull/2864)
+
+-----------
+
+### Internals
+
+* A specialised exception realm::OutOfDiskSpace is thrown instead of a generic
+  runtime exception when writing fails because the disk is full or the user exceeds
+  the allotted disk quota.
+  PR [#2861](https://github.com/realm/realm-core/pull/2861).
+
+----------------------------------------------
+
+# 3.2.1 Release notes
+
+### Bugfixes
+
+* Compact now throws an exception if writing fails for some reason
+  instead of ignoring errors and possibly causing corruption.
+  In particular, this solves file truncation causing "bad header" exceptions
+  after a compact operation on a file system that is running out of disk space.
+  PR [#2852](https://github.com/realm/realm-core/pull/2852).
+
+-----------
+
+### Internals
+
+* Moved object store's true and false query expressions down to core.
+  PR [#2857](https://github.com/realm/realm-core/pull/2857).
+
+----------------------------------------------
+
+# 3.2.0 Release notes
+
+### Enhancements
+
+* Added metrics tracking as an optional SharedGroup feature.
+  PR [#2840](https://github.com/realm/realm-core/pull/2840).
+
+-----------
+
+### Internals
+
+* Improve crash durability on windows.
+  PR [#2845](https://github.com/realm/realm-core/pull/2845).
+* Removed incorrect string column type traits, which could cause errors.
+  They were unused. PR [#2846](https://github.com/realm/realm-core/pull/2846).
+
+----------------------------------------------
+
+# 3.1.0 Release notes
+
+### Bugfixes
+
+* A linker error in some configurations was addressed by adding an explicit
+  instantiation of `Table::find_first` for `BinaryData`.
+  [#2823](https://github.com/realm/realm-core/pull/2823)
+
+### Enhancements
+
+* Implemented `realm::util::File::is_dir`, `realm::util::File::resolve`,
+  and `realm::util::DirScanner` on Windows.
+
+----------------------------------------------
+
+# 3.0.0 Release notes
+
+### Bugfixes
+
+* Fixed handle leak on Windows (https://github.com/realm/realm-core/pull/2781)
+* Fixed a use-after-free when a TableRef for a table containing a subtable
+  outlives the owning group.
+
+### Breaking changes
+
+* Added support for compound sort and distinct queries.
+    - Multiple consecutive calls to sort or distinct compound on each other
+      in the order applied rather than replacing the previous one.
+    - The order that sort and distinct are applied can change the query result.
+    - Applying an empty sort or distinct descriptor is now a no-op, this
+      could previously be used to clear a sort or distinct operation.
+  PR [#2644](https://github.com/realm/realm-core/pull/2644)
+* Support for size query on LinkedList removed. This is perhaps not so 
+  breaking after all since it is probably not used.
+  PR [#2532](https://github.com/realm/realm-core/pull/2532).
+* Replication interface changed. The search index functions now operate
+  on a descriptor and not a table.
+  PR [#2561](https://github.com/realm/realm-core/pull/2561).
+* New replication instruction: instr_AddRowWithKey
+* Add the old table size to the instr_TableClear replication instruction.
+* Throw a MaximumFileSizeExceeded exception during commits or allocations
+  instead of causing corruption or asserting. This would most likely be
+  seen when creating large Realm files on 32 bit OS.
+  PR [#2795](https://github.com/realm/realm-core/pull/2795).
+
+### Enhancements
+
+* Enhanced support for query in subtables:
+  Query q = table->column<SubTable>(0).list<Int>() == 5;
+  Query q = table->column<SubTable>(0).list<Int>().min() >= 2;
+  Query q = table->column<SubTable>(1).list<String>().begins_with("Bar");
+  PR [#2532](https://github.com/realm/realm-core/pull/2532).
+* Subtable column can now be nullable. You can use `is_null()` and `set_null()`
+  on a subtable element.
+  PR [#2560](https://github.com/realm/realm-core/pull/2560).
+* Support for search index on subtable columns. Only one level of subtables
+  are currently supported, that is, you cannot create a search index in a
+  subtable of a subtable (will throw exception). NOTE: Core versions prior to
+  this version will not be able to open .realm files of this Core version if
+  this Core version has added such indexes. Adding or removing an index will
+  take place for *all* subtables in a subtable column. There is no way to add
+  or remove it from single individual subtables.
+  PR [#2561](https://github.com/realm/realm-core/pull/2561).
+* Support for encryption on Windows (Win32 + UWP).
+  PR [#2643](https://github.com/realm/realm-core/pull/2643).
+* Add Table::add_row_with_key(). Adds a row and fills an integer column with
+  a value in one operation.
+  PR [#2596](https://github.com/realm/realm-core/pull/2596)
+  Issue [#2585](https://github.com/realm/realm-core/issues/2585)
+* Add more overloads with realm::null - PR [#2669](https://github.com/realm/realm-core/pull/2669)
+  - `size_t Table::find_first(size_t col_ndx, null)`
+  - `OutputStream& operator<<(OutputStream& os, const null&)`
+
+-----------
+
+### Internals
+
+* The RuntimeLibrary of the Windows build is changed from MultiThreadedDLL to
+  just MultiThreaded so as to statically link the Visual C++ runtime libraries,
+  removing the onus on end-users to have the correct runtime redistributable
+  package or satellite assembly pack installed. Libraries that link against Core
+  on Windows will have to adjust their compiler flags accordingly.
+  PR [#2611](https://github.com/realm/realm-core/pull/2611).
+* Win32+UWP: Switched from pthread-win32 to native API.
+  PR [#2602](https://github.com/realm/realm-core/pull/2602).
+* Implemented inter-process CondVars on Windows (Win32 + UWP). They should be
+  fair and robust.
+  PR [#2497](https://github.com/realm/realm-core/pull/2497).
+* The archives produced by the packaging process for Mac builds are now
+  .tar.gz files rather than .tar.xz files, with the exception of the aggregate
+  realm-core-cocoa-VERSION.tar.xz archive, which remains as a .tar.xz file.
+
+----------------------------------------------
+
+# 2.9.2 Release notes
+
+### Bugfixes
+
+* Throw a MaximumFileSizeExceeded exception during commits or allocations
+  instead of causing corruption or asserting. This would most likely be
+  seen when creating large Realm files on 32 bit OS.
+  PR [#2795](https://github.com/realm/realm-core/pull/2795).
+
+**Note: This is a hotfix release built on top of 2.9.1. The above fixes are not present in version 3.0.0.**
+
+----------------------------------------------
+
+# 2.9.1 Release notes
+
+### Bugfixes
+
+* A linker error in some configurations was addressed by adding an explicit
+  instantiation of `Table::find_first` for `BinaryData`.
+  [#2823](https://github.com/realm/realm-core/pull/2823).
+
+-----------
+
+### Internals
+
+* The archives produced by the packaging process for Mac builds are now
+  .tar.gz files rather than .tar.xz files, with the exception of the aggregate
+  realm-core-cocoa-VERSION.tar.xz archive, which remains as a .tar.xz file.
+
+**Note: This is a hotfix release built on top of 2.9.0. The above fixes are not present in version 3.0.0.**
+
+----------------------------------------------
+
+# 2.9.0 Release notes
+
+### Bugfixes
+
+* Attempting to open a small unencrypted Realm file with an encryption key would
+  produce an empty encrypted Realm file. Fixed by detecting the case and
+  throwing an exception.
+  PR [#2645](https://github.com/realm/realm-core/pull/2645)
+* Querying SharedGroup::wait_for_change() immediately after a commit()
+  would return instead of waiting for the next change.
+  PR [#2563](https://github.com/realm/realm-core/pull/2563).
+* Opening a second SharedGroup may trigger a file format upgrade if the history
+  schema version is non-zero.
+  Fixes issue [#2724](https://github.com/realm/realm-core/issues/2724).
+  PR [#2726](https://github.com/realm/realm-core/pull/2726).
+* Fix incorrect results from TableView::find_first().
+* Fix crash on rollback of Table::optimize(). Currently unused by bindings.
+  PR [#2753](https://github.com/realm/realm-core/pull/2753).
+* Update frozen TableViews when Table::swap() is called.
+  PR [#2757](https://github.com/realm/realm-core/pull/2757).
+
+### Enhancements
+
+* Add method to get total count of backlinks for a row.
+  PR [#2672](https://github.com/realm/realm-core/pull/2672).
+* Add try_remove_dir() and try_remove_dir_recursive() functions.
+
+-----------
+
+### Internals
+
+* On Apple platforms, use `os_log` instead of `asl_log` when possible.
+  PR [#2722](https://github.com/realm/realm-core/pull/2722).
+
+----------------------------------------------
+
+# 2.8.6 Release notes
+
+### Bugfixes
+* Fixed a bug where case insensitive queries wouldn't return all results.
+  PR [#2675](https://github.com/realm/realm-core/pull/2675).
+
+----------------------------------------------
+
+# 2.8.5 Release notes
+
+### Internals
+
+* `_impl::GroupFriend::get_top_ref()` was added.
+  PR [#2683](https://github.com/realm/realm-core/pull/2683).
+
+----------------------------------------------
+
+# 2.8.4 Release notes
+
+### Bugfixes
+
+* Fixes bug in encryption that could cause deadlocks/hangs and possibly
+  other bugs too.
+  Fixes issue [#2650](https://github.com/realm/realm-core/pull/2650).
+  PR [#2668](https://github.com/realm/realm-core/pull/2668).
+
+-----------
+
+### Internals
+
+* Fix an assert that prevented `Group::commit()` from discarding history from a
+  Realm file opened in nonshared mode (via `Group::open()`, as opposed to
+  `SharedGroup::open()`).
+  PR [#2655](https://github.com/realm/realm-core/pull/2655).
+* Improve ASAN and TSAN build modes (`sh build.sh asan` and `sh build.sh tsan`)
+  such that they do not clobber the files produced during regular builds, and
+  also do not clobber each others files. Also `UNITTEST_THREADS` and
+  `UNITTEST_PROGRESS` options are no longer hard-coded in ASAN and TSAN build
+  modes.
+  PR [#2660](https://github.com/realm/realm-core/pull/2660).
+
+----------------------------------------------
+
+# 2.8.3 Release notes
+
+### Internals
+
+* Disabled a sleep in debug mode that was impairing external tests.
+  PR [#2651](https://github.com/realm/realm-core/pull/2651).
+
+----------------------------------------------
+
+# 2.8.2 Release notes
+
+### Bugfixes
+
+* Now rejecting a Realm file specifying a history schema version that is newer
+  than the one expected by the code.
+  PR [#2642](https://github.com/realm/realm-core/pull/2642).
+* No longer triggering a history schema upgrade when opening an empty Realm file
+  (when `top_ref` is zero).
+  PR [#2642](https://github.com/realm/realm-core/pull/2642).
+
+----------------------------------------------
+
+# 2.8.1 Release notes
+
+### Bugfixes
+
+* Add #include <realm/util/safe_int_ops.hpp> in alloc.hpp.
+  PR [#2622](https://github.com/realm/realm-core/pull/2622).
+* Fix crash in large (>4GB) encrypted Realm files.
+  PR [#2572](https://github.com/realm/realm-core/pull/2572).
+* Fix missing symbols for some overloads of Table::find_first
+  in some configurations.
+  PR [#2624](https://github.com/realm/realm-core/pull/2624).
+  
+----------------------------------------------
+
+# 2.8.0 Release notes
+
+### Bugfixes
+
+* Fix a race condition in encrypted files which can lead to
+  crashes on devices using OpenSSL (Android).
+  PR [#2616](https://github.com/realm/realm-core/pull/2616).
+
+### Enhancements
+
+* Enable encryption on watchOS.
+  Cocoa issue [#2876](https://github.com/realm/realm-cocoa/issues/2876).
+  PR [#2598](https://github.com/realm/realm-core/pull/2598).
+* Enforce consistent use of encryption keys across all threads.
+  PR [#2558](https://github.com/realm/realm-core/pull/2558).
+
+----------------------------------------------
+
+# 2.7.0 Release notes
+
+### Bugfixes
+
+* Fix for creating process-shared mutex objects in the wrong kernel object namespace on UWP.
+  PR [#2579](https://github.com/realm/realm-core/pull/2579).
+
+### Enhancements
+
+* Add `Group::compute_aggregated_byte_size()` and
+  `Table::compute_aggregated_byte_size()` for debugging/diagnostics purposes.
+  PR [#2591](https://github.com/realm/realm-core/pull/2591).
+* `Table` and `TableView` refactoring and improvements.
+  PR [#2571](https://github.com/realm/realm-core/pull/2571).
+  * Add a templated version of `Table::set()` to go with `Table::get()`.
+  * Add `TableView::find_first_timestamp()`.
+  * Add `TableView::find_first<T>()`.
+  * Make `Table::find_first<T>()` public and add support for most column types.
+  * Add wrappers for `Table::set<T>()` to `Row`.
+  * Add support for all column types in `Table::get<T>()`.
+
+-----------
+
+### Internals
+
+* Make `Array::stats()` available in release mode builds (not just in debug mode
+  builds).
+  PR [#2591](https://github.com/realm/realm-core/pull/2591).
+
+----------------------------------------------
+
+# 2.6.2 Release notes
+
+### Bugfixes
+
+* Fix for incorrect, redundant string index tree traversal for case insensitive searches
+  for strings with some characters being identical in upper and lower case (e.g. numbers).
+  PR [#2578](https://github.com/realm/realm-core/pull/2578),
+  Cocoa issue [#4895](https://github.com/realm/realm-cocoa/issues/4895)
+
+----------------------------------------------
+
+# 2.6.1 Release notes
+
+### Bugfixes
+
+* `mkfifo` on external storage fails with `EINVAL` on some devices with Android 7.x,
+  which caused crash when opening Realm.
+  PR[#2574](https://github.com/realm/realm-core/pull/2574),
+  Issue [#4461](https://github.com/realm/realm-java/issues/4461).
+
+----------------------------------------------
+
+# 2.6.0 Release notes
+
+### Bugfixes
+
+* Work around a bug in macOS which could cause a deadlock when trying to obtain a shared lock
+  using flock(). PR [#2552](https://github.com/realm/realm-core/pull/2552),
+  issue [#2434](https://github.com/realm/realm-core/issues/2434).
+
+### Enhancements
+
+* Add support for `SharedGroup::try_begin_write()` and corresponding `try_lock()`
+  functionality in low level Mutex classes.
+  PR [#2547](https://github.com/realm/realm-core/pull/2547/files)
+  Fixes issue [#2538](https://github.com/realm/realm-core/issues/2538)
+* New file system utility functions: `util::remove_dir_recursive()` and
+  `util::File::for_each()`. PR [#2556](https://github.com/realm/realm-core/pull/2556).
+* Made case insensitive queries use the new index based case insensitive search.
+  PR [#2486](https://github.com/realm/realm-core/pull/2486)
+
+----------------------------------------------
+
+# 2.5.1 Release notes
+
+### Enhancements
+
+* Restore support for opening version 6 files in read-only mode.
+  PR [#2549](https://github.com/realm/realm-core/pull/2549).
+
+----------------------------------------------
+
 # 2.5.0 Release notes
 
 ### Bugfixes

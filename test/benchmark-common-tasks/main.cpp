@@ -20,6 +20,8 @@
 #include <sstream>
 
 #include <realm.hpp>
+#include <realm/query_expression.hpp> // only needed to compile on v2.6.0
+#include <realm/string_data.hpp>
 #include <realm/util/file.hpp>
 
 #include "compatibility.hpp"
@@ -59,6 +61,10 @@ const size_t max_repetitions = 1000;
 const double min_duration_s = 0.1;
 const double min_warmup_time_s = 0.05;
 
+const char* to_lead_cstr(RealmDurability level);
+const char* to_ident_cstr(RealmDurability level);
+
+
 struct Benchmark {
     virtual ~Benchmark()
     {
@@ -77,6 +83,8 @@ struct Benchmark {
     {
     }
     virtual void operator()(SharedGroup&) = 0;
+    RealmDurability m_durability = RealmDurability::Full;
+    const char* m_encryption_key = nullptr;
 };
 
 struct BenchmarkUnorderedTableViewClear : Benchmark {
@@ -593,6 +601,99 @@ struct BenchmarkQueryLongString : BenchmarkWithStrings {
     }
 };
 
+struct BenchmarkQueryInsensitiveString : BenchmarkWithStringsTable {
+    const char* name() const
+    {
+        return "QueryInsensitiveString";
+    }
+
+    std::string gen_random_case_string(size_t length)
+    {
+        std::stringstream ss;
+        for (size_t c = 0; c < length; ++c) {
+            bool lowercase = (rand() % 2) == 0;
+            // choose characters from a-z or A-Z
+            ss << char((rand() % 26) + (lowercase ? 97 : 65));
+        }
+        return ss.str();
+    }
+
+    std::string shuffle_case(std::string str)
+    {
+        for (size_t i = 0; i < str.size(); ++i) {
+            char c = str[i];
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
+                bool change_case = (rand() % 2) == 0;
+                c ^= change_case ? 0x20 : 0;
+            }
+            str[i] = c;
+        }
+        return str;
+    }
+
+    size_t rand() {
+        return seeded_rand.draw_int<size_t>();
+    }
+
+    void before_all(SharedGroup& group)
+    {
+        BenchmarkWithStringsTable::before_all(group);
+
+        // chosen by fair dice roll, guaranteed to be random
+        static const unsigned long seed = 4;
+        seeded_rand.seed(seed);
+
+        WriteTransaction tr(group);
+        TableRef t = tr.get_table("StringOnly");
+        t->add_empty_row(BASE_SIZE * 4);
+        const size_t max_chars_in_string = 100;
+
+        for (size_t i = 0; i < BASE_SIZE * 4; ++i) {
+            size_t num_chars = rand() % max_chars_in_string;
+            std::string randomly_cased_string = gen_random_case_string(num_chars);
+            t->set_string(0, i, randomly_cased_string);
+        }
+        tr.commit();
+    }
+    std::string needle;
+    bool successful = false;
+    Random seeded_rand;
+
+    void before_each(SharedGroup& group)
+    {
+        ReadTransaction tr(group);
+        ConstTableRef table = tr.get_table("StringOnly");
+        size_t target_row = rand() % table->size();
+        StringData target_str = table->get_string(0, target_row);
+        needle = shuffle_case(target_str.data());
+    }
+
+    void operator()(SharedGroup& group)
+    {
+        ReadTransaction tr(group);
+        ConstTableRef table = tr.get_table("StringOnly");
+        StringData str(needle);
+        Query q = table->where().equal(0, str, false);
+        TableView res = q.find_all();
+        successful = res.size() > 0;
+    }
+};
+
+struct BenchmarkQueryInsensitiveStringIndexed : BenchmarkQueryInsensitiveString {
+    const char* name() const
+    {
+        return "QueryInsensitiveStringIndexed";
+    }
+    void before_all(SharedGroup& group)
+    {
+        BenchmarkQueryInsensitiveString::before_all(group);
+        WriteTransaction tr(group);
+        TableRef t = tr.get_table("StringOnly");
+        t->add_search_index(0);
+        tr.commit();
+    }
+};
+
 struct BenchmarkSetLongString : BenchmarkWithLongStrings {
     const char* name() const
     {
@@ -691,6 +792,52 @@ struct BenchmarkGetLinkList : Benchmark {
     }
 };
 
+struct BenchmarkNonInitatorOpen : Benchmark {
+    const char* name() const
+    {
+        return "NonInitiatorOpen";
+    }
+    // the shared realm will be removed after the benchmark finishes
+    std::unique_ptr<realm::test_util::SharedGroupTestPathGuard> path;
+    std::unique_ptr<SharedGroup> initiator;
+
+    std::unique_ptr<SharedGroup> do_open()
+    {
+        const std::string realm_path = *path;
+        return std::unique_ptr<SharedGroup>(create_new_shared_group(realm_path, m_durability, m_encryption_key));
+    }
+
+    void before_all(SharedGroup&)
+    {
+        // Generate the benchmark result texts:
+        std::stringstream ident_ss;
+        ident_ss << "BenchmarkCommonTasks_" << this->name()
+        << "_" << to_ident_cstr(m_durability);
+        std::string ident = ident_ss.str();
+
+        realm::test_util::unit_test::TestDetails test_details;
+        test_details.suite_name = "BenchmarkCommonTasks";
+        test_details.test_name = ident.c_str();
+        test_details.file_name = __FILE__;
+        test_details.line_number = __LINE__;
+
+        path = std::unique_ptr<realm::test_util::SharedGroupTestPathGuard>(new realm::test_util::SharedGroupTestPathGuard(ident));
+
+        // open once - session initiation
+        initiator = do_open();
+    }
+
+    void operator()(SharedGroup&)
+    {
+        // use groups of 10 to get higher times
+        for (size_t i = 0; i < 10; ++i) {
+            do_open();
+            // let it close, otherwise we get error: too many open files
+        }
+    }
+};
+
+
 const char* to_lead_cstr(RealmDurability level)
 {
     switch (level) {
@@ -760,6 +907,8 @@ void run_benchmark(BenchmarkResults& results)
         RealmDurability level = it->first;
         const char* key = it->second;
         B benchmark;
+        benchmark.m_durability = level;
+        benchmark.m_encryption_key = key;
 
         // Generate the benchmark result texts:
         std::stringstream lead_text_ss;
@@ -851,6 +1000,9 @@ int benchmark_common_tasks_main()
     BENCH(BenchmarkQueryLongString);
     BENCH(BenchmarkSetLongString);
     BENCH(BenchmarkGetLinkList);
+    BENCH(BenchmarkQueryInsensitiveString);
+    BENCH(BenchmarkQueryInsensitiveStringIndexed);
+    BENCH(BenchmarkNonInitatorOpen);
 
 #undef BENCH
     return 0;

@@ -134,6 +134,24 @@
         }                                                                                                            \
     } while (false)
 
+#if REALM_VALGRIND
+static const bool running_with_valgrind = true;
+#else
+static const bool running_with_valgrind = false;
+#endif
+
+#if REALM_TSAN
+static const bool running_with_tsan = true;
+#else
+static const bool running_with_tsan = false;
+#endif
+
+#if REALM_ASAN
+static const bool running_with_asan = true;
+#else
+static const bool running_with_asan = false;
+#endif
+
 
 //@{
 

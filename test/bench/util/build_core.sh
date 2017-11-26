@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# See ./util/build-core.sh --help for documentation.
+# See ./util/build_core.sh --help for documentation.
 
 builddir=./core-builds
 
@@ -15,7 +15,7 @@ showHelp () {
   showUsage
   echo ""
   cat <<EOF
-./util/build-core.sh
+./util/build_core.sh
 
 This script builds the given version of core (branch, commit, or tag) in a
 dedicated ${builddir} directory. This enables, for instance, comparing the
@@ -27,12 +27,15 @@ existing repository as an alternate will require fewer objects to be
 copied from the repository being cloned, reducing network and local
 storage costs.
 
+You can set the environment variable REALM_BENCH_CHECKOUT_ONLY if you 
+just want the checkout and don't want to actually build all of core.
+
 Examples:
 
-$ ./util/build-core.sh master # master is assumed by default.
-$ ./util/build-core.sh tags/v0.97.3 # Tags must be prefixed with "tags/".
-$ ./util/build-core.sh ea310804 # Can be a short commit ID.
-$ ./util/build-core.sh 32b3b79d2ab90e784ad5f14f201d682be9746781
+$ ./util/build_core.sh master # master is assumed by default.
+$ ./util/build_core.sh tags/v0.97.3 # Tags must be prefixed with "tags/".
+$ ./util/build_core.sh ea310804 # Can be a short commit ID.
+$ ./util/build_core.sh 32b3b79d2ab90e784ad5f14f201d682be9746781
 
 This results in directories:
 
@@ -78,13 +81,57 @@ checkout () {
   # Check if given "ref" is a (remote) branch, and prepend origin/ if it is.
   # Otherwise, git-checkout will complain about updating paths and switching
   # branches at the same time.
-  if [ "$(git branch -r | grep -q "^\\s*origin/${ref}$")" ]; then
+  if git branch -r | grep -q "^\\s*origin/${ref}$"; then
     remoteref="origin/${ref}"
   else
     remoteref="${ref}"
   fi
 
   git checkout "${remoteref}"
+  build_system="shell"
+  if [ -e "CMakeLists.txt" ] && [ ! -e "build.sh" ]; then
+    build_system="cmake"
+  fi
+}
+
+clean () {
+  if [ "$build_system" = "cmake" ]; then
+    mkdir -p build
+    cd build || exit 1
+    cmake ..
+    make clean
+    cd .. || exit 1
+  elif [ "$build_system" = "shell" ]; then
+    sh build.sh clean
+  else
+    echo "Unknown build system!"
+    exit 1
+  fi
+}
+
+configure () {
+  if [ "$build_system" = "cmake" ]; then
+    : # this was taken care of by cmake
+  elif [ "$build_system" = "shell" ]; then
+    sh build.sh config "${basedir}"
+  else
+    echo "Unknown build system!"
+    exit 1
+  fi
+}
+
+build () {
+  if [ "$build_system" = "cmake" ]; then
+    mkdir -p build
+    cd build || exit 1
+    make
+    cd .. || exit 1
+  elif [ "$build_system" = "shell" ]; then
+    sh build.sh build
+  else
+    echo "Unknown build system!"
+    exit 1
+  fi
 }
 
 if [ ! -d "${srcdir}" ]; then
@@ -93,15 +140,17 @@ if [ ! -d "${srcdir}" ]; then
   else
     git clone https://github.com/realm/realm-core.git --reference "${localrepo}" "${srcdir}"
   fi
-  cd "${srcdir}"
+  cd "${srcdir}" || exit 1
   checkout
-  sh build.sh clean
-  sh build.sh config "${basedir}"
+  clean
+  configure
 else
-  cd "${srcdir}"
+  cd "${srcdir}" || exit 1
   git fetch
   checkout
 fi
 
-sh build.sh build
-sh build.sh install
+if [ -z "$REALM_BENCH_CHECKOUT_ONLY" ]; then
+  build
+fi
+

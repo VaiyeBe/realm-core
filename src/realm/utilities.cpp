@@ -238,12 +238,20 @@ int fast_popcount64(int64_t x)
     return fast_popcount32(static_cast<int32_t>(x)) + fast_popcount32(static_cast<int32_t>(x >> 32));
 }
 
+// Mutex only to make Helgrind happy
+// If it was declared as a static inside fastrand() then it could have a race being initialised and
+// being locked because a static inside a function is constructed the first time execution
+// hits the function declaration (lazily). To avoid that race we declare it outside the function
+// which means it will be constructed on program start. Post C++11, there should be no race on a
+// construction of a local static, but tsan seems to report this as a false positive sometimes.
+namespace {
+util::Mutex fastrand_mutex;
+} // end anonymous namespace
+
 // A fast, thread safe, mediocre-quality random number generator named Xorshift
 uint64_t fastrand(uint64_t max, bool is_seed)
 {
-    // Mutex only to make Helgrind happy
-    static util::Mutex m;
-    util::LockGuard lg(m);
+    util::LockGuard lg(fastrand_mutex);
 
     // All the atomics (except the add) may be eliminated completely by the compiler on x64
     static std::atomic<uint64_t> state(is_seed ? max : 1);
@@ -304,6 +312,24 @@ void process_mem_usage(double& vm_usage, double& resident_set)
     vm_usage = vsize / 1024.0;
     resident_set = rss * page_size_kb;
 #endif
+}
+#endif
+
+#ifdef _WIN32
+int gettimeofday(struct timeval * tp, struct timezone * tzp)
+{
+    FILETIME	file_time;
+    SYSTEMTIME	system_time;
+    ULARGE_INTEGER ularge;
+
+    GetSystemTime(&system_time);
+    SystemTimeToFileTime(&system_time, &file_time);
+    ularge.LowPart = file_time.dwLowDateTime;
+    ularge.HighPart = file_time.dwHighDateTime;
+    const uint64_t epoch = 116444736000000000;
+    tp->tv_sec = (long)((ularge.QuadPart - epoch) / 10000000L);
+    tp->tv_usec = (long)(system_time.wMilliseconds * 1000);
+    return 0;
 }
 #endif
 

@@ -1,8 +1,11 @@
-FROM ubuntu:16.04
+FROM centos:6
 
-ARG PACKAGECLOUD_URL
-
-RUN apt-get update && apt-get install -y \
-  build-essential g++-4.9 git \
-  libssl-dev
-
+# Install EPEL & devtoolset
+# On CentOS6, there is a bug with OverlayFS and Docker. It is needed to touch
+# /var/lib/rpm/* in order to work around this issue.
+# Link: https://github.com/docker/docker/issues/10180
+RUN touch /var/lib/rpm/* \
+ && yum -y install \
+      epel-release \
+      centos-release-scl-rh \
+ && yum clean all

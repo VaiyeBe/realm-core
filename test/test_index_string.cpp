@@ -27,6 +27,7 @@
 #include <realm/util/to_string.hpp>
 #include <set>
 #include "test.hpp"
+#include "test_string_types.hpp"
 #include "util/misc.hpp"
 #include "util/random.hpp"
 
@@ -104,30 +105,21 @@ TEST(StringIndex_NonIndexable)
     }
 }
 
-TEST_TYPES(StringIndex_IsEmpty, non_nullable, nullable)
+TEST_TYPES(StringIndex_IsEmpty, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    // Create a column with string values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     // Create a new index on column
     const StringIndex& ndx = *col.create_search_index();
 
     CHECK(ndx.is_empty());
-
-    // Clean up
-    col.destroy();
 }
 
-TEST_TYPES(StringIndex_BuildIndex, non_nullable, nullable)
+TEST_TYPES(StringIndex_BuildIndex, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    // Create a column with string values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add(s1);
     col.add(s2);
@@ -153,18 +145,12 @@ TEST_TYPES(StringIndex_BuildIndex, non_nullable, nullable)
     CHECK_EQUAL(3, r4);
     CHECK_EQUAL(5, r5);
     CHECK_EQUAL(6, r6);
-
-    // Clean up
-    col.destroy();
 }
 
-TEST_TYPES(StringIndex_DeleteAll, non_nullable, nullable)
+TEST_TYPES(StringIndex_DeleteAll, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    // Create a column with string values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add(s1);
     col.add(s2);
@@ -186,11 +172,7 @@ TEST_TYPES(StringIndex_DeleteAll, non_nullable, nullable)
     col.erase(2);
     col.erase(1);
     col.erase(0);
-#ifdef REALM_DEBUG
     CHECK(ndx.is_empty());
-#else
-    static_cast<void>(ndx);
-#endif
 
     // Re-insert values
     col.add(s1);
@@ -210,23 +192,13 @@ TEST_TYPES(StringIndex_DeleteAll, non_nullable, nullable)
     col.erase(0);
     col.erase(0);
     col.erase(0);
-#ifdef REALM_DEBUG
     CHECK(ndx.is_empty());
-#else
-    static_cast<void>(ndx);
-#endif
-
-    // Clean up
-    col.destroy();
 }
 
-TEST_TYPES(StringIndex_Delete, non_nullable, nullable)
+TEST_TYPES(StringIndex_Delete,string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    // Create a column with random values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add(s1);
     col.add(s2);
@@ -264,20 +236,13 @@ TEST_TYPES(StringIndex_Delete, non_nullable, nullable)
     // Delete all items
     col.erase(0);
     col.erase(0);
-#ifdef REALM_DEBUG
     CHECK(ndx.is_empty());
-#endif
-
-    // Clean up
-    col.destroy();
 }
 
-TEST_TYPES(StringIndex_MoveLastOver, non_nullable, nullable)
+TEST_TYPES(StringIndex_MoveLastOver, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add(s1);
     col.add(s2);
@@ -340,40 +305,25 @@ TEST_TYPES(StringIndex_MoveLastOver, non_nullable, nullable)
         CHECK_EQUAL(0, matches.get(0));
         CHECK_EQUAL(1, matches.get(1));
     }
-
-    col.destroy();
 }
 
-TEST_TYPES(StringIndex_ClearEmpty, non_nullable, nullable)
+TEST_TYPES(StringIndex_ClearEmpty, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    // Create a column with string values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     // Create a new index on column
     const StringIndex& ndx = *col.create_search_index();
 
     // Clear to remove all entries
     col.clear();
-#ifdef REALM_DEBUG
     CHECK(ndx.is_empty());
-#else
-    static_cast<void>(ndx);
-#endif
-
-    // Clean up
-    col.destroy();
 }
 
-TEST_TYPES(StringIndex_Clear, non_nullable, nullable)
+TEST_TYPES(StringIndex_Clear,string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    // Create a column with string values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add(s1);
     col.add(s2);
@@ -388,11 +338,7 @@ TEST_TYPES(StringIndex_Clear, non_nullable, nullable)
 
     // Clear to remove all entries
     col.clear();
-#ifdef REALM_DEBUG
     CHECK(ndx.is_empty());
-#else
-    static_cast<void>(ndx);
-#endif
 
     // Re-insert values
     col.add(s1);
@@ -416,18 +362,12 @@ TEST_TYPES(StringIndex_Clear, non_nullable, nullable)
     CHECK_EQUAL(3, r4);
     CHECK_EQUAL(5, r5);
     CHECK_EQUAL(6, r6);
-
-    // Clean up
-    col.destroy();
 }
 
-TEST_TYPES(StringIndex_Insert, non_nullable, nullable)
+TEST_TYPES(StringIndex_Insert, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    // Create a column with random values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add(s1);
     col.add(s2);
@@ -468,18 +408,12 @@ TEST_TYPES(StringIndex_Insert, non_nullable, nullable)
     CHECK_EQUAL(4, col.find_first(s3));
     CHECK_EQUAL(5, col.find_first(s4));
     CHECK_EQUAL(7, col.find_first(s6));
-
-    // Clean up
-    col.destroy();
 }
 
-TEST_TYPES(StringIndex_Set, non_nullable, nullable)
+TEST_TYPES(StringIndex_Set, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    // Create a column with random values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add(s1);
     col.add(s2);
@@ -519,18 +453,12 @@ TEST_TYPES(StringIndex_Set, non_nullable, nullable)
     CHECK_EQUAL(2, col.find_first(s7));
     CHECK_EQUAL(3, col.find_first(s4));
     CHECK_EQUAL(4, col.find_first(s6));
-
-    // Clean up
-    col.destroy();
 }
 
-TEST_TYPES(StringIndex_Count, non_nullable, nullable)
+TEST_TYPES(StringIndex_Count, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    // Create a column with duplcate values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add(s1);
     col.add(s2);
@@ -557,18 +485,12 @@ TEST_TYPES(StringIndex_Count, non_nullable, nullable)
     CHECK_EQUAL(2, c2);
     CHECK_EQUAL(3, c3);
     CHECK_EQUAL(4, c4);
-
-    // Clean up
-    col.destroy();
 }
 
-TEST_TYPES(StringIndex_Distinct, non_nullable, nullable)
+TEST_TYPES(StringIndex_Distinct, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    // Create a column with duplcate values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add(s1);
     col.add(s2);
@@ -598,16 +520,12 @@ TEST_TYPES(StringIndex_Distinct, non_nullable, nullable)
 
     // Clean up
     results.destroy();
-    col.destroy();
 }
 
-TEST_TYPES(StringIndex_FindAllNoCopy, non_nullable, nullable)
+TEST_TYPES(StringIndex_FindAllNoCopy, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    // Create a column with duplcate values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add(s1);
     col.add(s2);
@@ -640,9 +558,6 @@ TEST_TYPES(StringIndex_FindAllNoCopy, non_nullable, nullable)
     CHECK_EQUAL(7, results.get(1));
     CHECK_EQUAL(8, results.get(2));
     CHECK_EQUAL(9, results.get(3));
-
-    // Clean up
-    col.destroy();
 }
 
 // If a column contains a specific value in multiple rows, then the index will store a list of these row numbers
@@ -738,11 +653,10 @@ TEST(StringIndex_FindAllNoCopy2_IntNull)
     col.destroy();
 }
 
-TEST(StringIndex_FindAllNoCopyCommonPrefixStrings)
+TEST_TYPES(StringIndex_FindAllNoCopyCommonPrefixStrings, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    // Create a column with duplcate values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
     StringIndex& ndx = *col.create_search_index();
 
     auto test_prefix_find = [&](std::string prefix) {
@@ -799,9 +713,6 @@ TEST(StringIndex_FindAllNoCopyCommonPrefixStrings)
     test_prefix_find(std_max);
     test_prefix_find(std_over_max);
     test_prefix_find(std_under_max);
-
-    // Clean up
-    col.destroy();
 }
 
 
@@ -975,16 +886,13 @@ StringData create_string_with_nuls(const size_t bits, const size_t length, char*
 
 
 // Test for generated strings of length 1..16 with all combinations of embedded NUL bytes
-TEST_TYPES(StringIndex_EmbeddedZeroesCombinations, non_nullable, nullable)
+TEST_TYPES(StringIndex_EmbeddedZeroesCombinations, string_column, nullable_string_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-    constexpr unsigned int seed = 42;
-
-    // String index
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
     const StringIndex& ndx = *col.create_search_index();
 
+    constexpr unsigned int seed = 42;
     const size_t MAX_LENGTH = 16; // Test medium
     char tmp[MAX_LENGTH];         // this is a bit of a hack, that relies on the string being copied in column.add()
 
@@ -1013,18 +921,13 @@ TEST_TYPES(StringIndex_EmbeddedZeroesCombinations, non_nullable, nullable)
             }
         }
     }
-
-    col.destroy();
 }
 
 // Tests for a bug with strings containing zeroes
-TEST_TYPES(StringIndex_EmbeddedZeroes, non_nullable, nullable)
+TEST_TYPES(StringIndex_EmbeddedZeroes, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    // String index
-    ref_type ref2 = StringColumn::create(Allocator::get_default());
-    StringColumn col2(Allocator::get_default(), ref2, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col2 = test_resources.get_column();
     const StringIndex& ndx2 = *col2.create_search_index();
 
     // FIXME: re-enable once embedded nuls work
@@ -1053,14 +956,12 @@ TEST_TYPES(StringIndex_EmbeddedZeroes, non_nullable, nullable)
     CHECK_EQUAL(f, not_found);
 
     col.destroy();
-    col2.destroy();
 }
 
-TEST(StringIndex_Null)
+TEST_TYPES(StringIndex_Null, nullable_string_column, nullable_enum_column)
 {
-    // Create a column with string values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, true);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add("");
     col.add(realm::null());
@@ -1069,13 +970,11 @@ TEST(StringIndex_Null)
 
     const size_t r1 = ndx.find_first(realm::null());
     CHECK_EQUAL(r1, 1);
-
-    col.destroy();
 }
 
-TEST_TYPES(StringIndex_Zero_Crash, non_nullable, nullable)
+TEST_TYPES(StringIndex_Zero_Crash, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
+    bool nullable = TEST_TYPE::is_nullable();
 
     // StringIndex could crash if strings ended with one or more 0-bytes
     Table table;
@@ -1086,6 +985,9 @@ TEST_TYPES(StringIndex_Zero_Crash, non_nullable, nullable)
     table.set_string(0, 1, StringData("\0", 1));
     table.set_string(0, 2, StringData("\0\0", 2));
     table.add_search_index(0);
+
+    if (TEST_TYPE::is_enumerated())
+        table.optimize(true /* enforce */);
 
     size_t t;
 
@@ -1229,11 +1131,10 @@ TEST(StringIndex_Integer_Increasing)
     }
 }
 
-TEST(StringIndex_Duplicate_Values)
+TEST_TYPES(StringIndex_Duplicate_Values, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    // Create a column with random values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, true);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     col.add(s1);
     col.add(s2);
@@ -1296,14 +1197,12 @@ TEST(StringIndex_Duplicate_Values)
     col.clear();
     CHECK(!ndx.has_duplicate_values());
     CHECK(col.size() == 0);
-
-    // Clean up
-    col.destroy();
 }
 
 namespace {
 
-void verify_single_move_last_over(TestContext& test_context, StringColumn& col, size_t index)
+template<class TestColumn>
+void verify_single_move_last_over(TestContext& test_context, TestColumn& col, size_t index)
 {
     std::string value = col.get(col.size() - 1);
     size_t orig_size = col.size();
@@ -1314,10 +1213,10 @@ void verify_single_move_last_over(TestContext& test_context, StringColumn& col, 
 
 } // unnamed namespace
 
-TEST(StringIndex_MoveLastOver_DoUpdateRef)
+TEST_TYPES(StringIndex_MoveLastOver_DoUpdateRef, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, true);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     // create subindex of repeated elements on a leaf
     size_t num_initial_repeats = 100;
@@ -1379,21 +1278,19 @@ TEST(StringIndex_MoveLastOver_DoUpdateRef)
     // remove final element
     col.move_last_over(0);
     CHECK(col.size() == 0);
-
-    col.destroy();
 }
 
-TEST(StringIndex_MaxBytes)
+TEST_TYPES(StringIndex_MaxBytes, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
+
     std::string std_max(StringIndex::s_max_offset, 'a');
     std::string std_over_max(std_max + "a");
     std::string std_under_max(StringIndex::s_max_offset >> 1, 'a');
     StringData max(std_max);
     StringData over_max(std_over_max);
     StringData under_max(std_under_max);
-
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, true);
 
     const StringIndex& ndx = *col.create_search_index();
 
@@ -1429,7 +1326,6 @@ TEST(StringIndex_MaxBytes)
         duplicate_check(dups, max);
         duplicate_check(dups, over_max);
     }
-    col.destroy();
 }
 
 
@@ -1438,11 +1334,10 @@ TEST(StringIndex_MaxBytes)
 // for the characters at the end (they have an identical very
 // long prefix). This was causing a stack overflow because of
 // the recursive nature of the insert function.
-TEST(StringIndex_InsertLongPrefix)
+TEST_TYPES(StringIndex_InsertLongPrefix, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, true);
-
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
     const StringIndex& ndx = *col.create_search_index();
 
     col.add("test_index_string1");
@@ -1525,15 +1420,15 @@ TEST(StringIndex_InsertLongPrefix)
     results.destroy();
 
     col.clear(); // calls recursive function Array::destroy_deep()
-    col.destroy();
 }
 
-TEST(StringIndex_InsertLongPrefixAndQuery)
+TEST_TYPES(StringIndex_InsertLongPrefixAndQuery, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
     constexpr int half_node_size = REALM_MAX_BPNODE_SIZE / 2;
+    bool nullable_column = TEST_TYPE::is_nullable();
     Group g;
     auto t = g.add_table("StringsOnly");
-    t->add_column(type_String, "first");
+    t->add_column(type_String, "first", nullable_column);
     t->add_search_index(0);
 
     std::string base(StringIndex::s_max_offset, 'a');
@@ -1561,6 +1456,8 @@ TEST(StringIndex_InsertLongPrefixAndQuery)
         index->to_dot(o, "");
     }
     */
+    if (TEST_TYPE::is_enumerated())
+        t->optimize(true /* force */);
 
     auto ndx_a = t->where().equal(0, StringData(str_a)).find();
     auto cnt = t->count_string(0, StringData(str_a));
@@ -1687,13 +1584,26 @@ TEST(StringIndex_Fuzzy)
 }
 
 
-TEST_TYPES(StringIndex_Insensitive, non_nullable, nullable)
-{
-    constexpr bool nullable = TEST_TYPE::value;
+namespace {
 
-    // Create a column with string values
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+// results returned by the index should be in ascending row order
+// this requirement is assumed by the query system which runs find_gte
+// and this will return wrong results unless the results are ordered
+void check_result_order(const IntegerColumn& results, TestContext& test_context)
+{
+    const size_t num_results = results.size();
+    for (size_t i = 1; i < num_results; ++i) {
+        CHECK(results.get(i - 1) < results.get(i));
+    }
+}
+
+} // end anonymous namespace
+
+
+TEST_TYPES(StringIndex_Insensitive, string_column, nullable_string_column, enum_column, nullable_enum_column)
+{
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
     const char* strings[] = {
         "john", "John", "jOhn", "JOhn", "joHn", "JoHn", "jOHn", "JOHn", "johN", "JohN", "jOhN", "JOhN", "joHN", "JoHN", "jOHN", "JOHN", "john" /* yes, an extra to test the "bucket" case as well */,
@@ -1720,8 +1630,9 @@ TEST_TYPES(StringIndex_Insensitive, non_nullable, nullable)
         // case sensitive
         ndx.find_all(results, strings[0]);
         CHECK_EQUAL(2, results.size());
-        CHECK_EQUAL(col.get(results.get(0)), strings[0]);
-        CHECK_EQUAL(col.get(results.get(1)), strings[0]);
+        CHECK_EQUAL(col.get(size_t(results.get(0))), strings[0]);
+        CHECK_EQUAL(col.get(size_t(results.get(1))), strings[0]);
+        check_result_order(results, test_context);
         results.clear();
     }
 
@@ -1732,10 +1643,11 @@ TEST_TYPES(StringIndex_Insensitive, non_nullable, nullable)
         ndx.find_all(results, needle, case_insensitive);
         CHECK_EQUAL(17, results.size());
         for (size_t i = 0; i < results.size(); ++i) {
-            auto upper_result = case_map(col.get(results.get(i)), true);
+            auto upper_result = case_map(col.get(size_t(results.get(i))), true);
             CHECK_EQUAL(upper_result, upper_needle);
 
         }
+        check_result_order(results, test_context);
         results.clear();
     }
 
@@ -1760,6 +1672,7 @@ TEST_TYPES(StringIndex_Insensitive, non_nullable, nullable)
         for (const TestData& t : td) {
             ndx.find_all(results, t.needle, t.case_insensitive);
             CHECK_EQUAL(t.result_size, results.size());
+            check_result_order(results, test_context);
             results.clear();
         }
     }
@@ -1776,7 +1689,6 @@ TEST_TYPES(StringIndex_Insensitive, non_nullable, nullable)
 
     // Clean up
     results.destroy();
-    col.destroy();
 }
 
 
@@ -1839,12 +1751,10 @@ TEST_TYPES(StringIndex_Insensitive_Unicode, non_nullable, nullable)
 */
 
 
-TEST_TYPES(StringIndex_45, non_nullable, nullable)
+TEST_TYPES(StringIndex_45, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
     const StringIndex& ndx = *col.create_search_index();
     std::string a4 = std::string(4, 'a');
     std::string A5 = std::string(5, 'A');
@@ -1859,7 +1769,6 @@ TEST_TYPES(StringIndex_45, non_nullable, nullable)
     CHECK_EQUAL(res.size(), 0);
 
     res.destroy();
-    col.destroy();
 }
 
 
@@ -1867,7 +1776,7 @@ namespace {
 
 std::string create_random_a_string(size_t max_len) {
     std::string s;
-    size_t len = fastrand(max_len);
+    size_t len = size_t(fastrand(max_len));
     for (size_t p = 0; p < len; p++) {
         s += fastrand(1) == 0 ? 'a' : 'A';
     }
@@ -1877,18 +1786,16 @@ std::string create_random_a_string(size_t max_len) {
 }
 
 
-TEST_TYPES(StringIndex_Insensitive_Fuzz, non_nullable, nullable)
+TEST_TYPES(StringIndex_Insensitive_Fuzz, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
     const size_t max_str_len = 9;
-    const size_t iters = 10;
+    const size_t iters = 3;
 
     for (size_t iter = 0; iter < iters; iter++) {
-        ref_type ref = StringColumn::create(Allocator::get_default());
-        StringColumn col(Allocator::get_default(), ref, nullable);
+        TEST_TYPE test_resources;
+        typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
 
-        size_t rows = fastrand(2 * REALM_MAX_BPNODE_SIZE - 1);
+        size_t rows = size_t(fastrand(2 * REALM_MAX_BPNODE_SIZE - 1));
 
         // Add 'rows' number of rows in the column
         for (size_t t = 0; t < rows; t++) {
@@ -1905,6 +1812,7 @@ TEST_TYPES(StringIndex_Insensitive_Fuzz, non_nullable, nullable)
             IntegerColumn res(Allocator::get_default(), results_ref);
 
             ndx.find_all(res, needle.c_str(), true);
+            check_result_order(res, test_context);
 
             // Check that all items in 'res' point at a match in 'col'
             auto needle_upper = case_map(needle, true);
@@ -1922,19 +1830,15 @@ TEST_TYPES(StringIndex_Insensitive_Fuzz, non_nullable, nullable)
             }
             res.destroy();
         }
-        col.destroy();
     }
 }
 
-
 // Exercise the StringIndex case insensitive search for strings with very long, common prefixes
 // to cover the special case code paths where different strings are stored in a list.
-TEST_TYPES(StringIndex_Insensitive_VeryLongStrings, non_nullable, nullable)
+TEST_TYPES(StringIndex_Insensitive_VeryLongStrings, string_column, nullable_string_column, enum_column, nullable_enum_column)
 {
-    constexpr bool nullable = TEST_TYPE::value;
-
-    ref_type ref = StringColumn::create(Allocator::get_default());
-    StringColumn col(Allocator::get_default(), ref, nullable);
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
     const StringIndex& ndx = *col.create_search_index();
 
     std::string long1 = std::string(StringIndex::s_max_offset + 10, 'a');
@@ -1956,6 +1860,7 @@ TEST_TYPES(StringIndex_Insensitive_VeryLongStrings, non_nullable, nullable)
 
     ndx.find_all(results, long1.c_str(), true);
     CHECK_EQUAL(results.size(), 4);
+    check_result_order(results, test_context);
     results.clear();
     ndx.find_all(results, long2.c_str(), true);
     CHECK_EQUAL(results.size(), 3);
@@ -1965,7 +1870,50 @@ TEST_TYPES(StringIndex_Insensitive_VeryLongStrings, non_nullable, nullable)
     results.clear();
 
     results.destroy();
-    col.destroy();
+}
+
+
+// Bug with case insensitive search on numbers that gives duplicate results
+TEST_TYPES(StringIndex_Insensitive_Numbers, string_column, nullable_string_column, enum_column, nullable_enum_column)
+{
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
+    const StringIndex& ndx = *col.create_search_index();
+
+    constexpr const char* number_string_16 = "1111111111111111";
+    constexpr const char* number_string_17 = "11111111111111111";
+
+    col.add(number_string_16);
+    col.add(number_string_17);
+
+    ref_type results_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn results(Allocator::get_default(), results_ref);
+
+    ndx.find_all(results, number_string_16, true);
+    CHECK_EQUAL(results.size(), 1);
+
+    results.destroy();
+}
+
+
+TEST_TYPES(StringIndex_Rover, string_column, nullable_string_column, enum_column, nullable_enum_column)
+{
+    TEST_TYPE test_resources;
+    typename TEST_TYPE::ColumnTestType& col = test_resources.get_column();
+
+    const StringIndex& ndx = *col.create_search_index();
+
+    col.add("ROVER");
+    col.add("Rover");
+
+    ref_type results_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn results(Allocator::get_default(), results_ref);
+
+    ndx.find_all(results, "rover", true);
+    CHECK_EQUAL(results.size(), 2);
+    check_result_order(results, test_context);
+
+    results.destroy();
 }
 
 

@@ -19,9 +19,13 @@
 #include "testsettings.hpp"
 #ifdef TEST_SHARED
 
+#include <condition_variable>
 #include <streambuf>
 #include <fstream>
 #include <tuple>
+#include <iostream>
+#include <fstream>
+#include <thread>
 
 // Need fork() and waitpid() for Shared_RobustAgainstDeathDuringWrite
 #ifndef _WIN32
@@ -36,6 +40,8 @@
 #include <windows.h>
 #endif
 
+#include <realm/history.hpp>
+#include <realm/lang_bind_helper.hpp>
 #include <realm.hpp>
 #include <realm/util/features.h>
 #include <realm/util/safe_int_ops.hpp>
@@ -89,6 +95,47 @@ using unit_test::TestContext;
 // check-testcase` (or one of its friends) from the command line.
 
 
+#if REALM_WINDOWS
+namespace {
+// NOTE: This does not work like on POSIX: The child will begin execution from
+// the unit test entry point, not from where fork() took place.
+//
+DWORD winfork(std::string unit_test_name)
+{
+    if (getenv("REALM_FORKED"))
+        return GetCurrentProcessId();
+
+    char filename[MAX_PATH];
+    DWORD success = GetModuleFileNameA(nullptr, filename, MAX_PATH);
+    if (success == 0 || success == MAX_PATH) {
+        DWORD err = GetLastError();
+        REALM_ASSERT_EX(false, err, MAX_PATH, filename);
+    }
+
+    GetModuleFileNameA(nullptr, filename, MAX_PATH);
+
+    StringBuffer environment;
+    environment.append("REALM_FORKED=1");
+    environment.append("\0", 1);
+    environment.append("UNITTEST_FILTER=" + unit_test_name);
+    environment.append("\0\0", 2);
+
+    PROCESS_INFORMATION process;
+    ZeroMemory(&process, sizeof(process));
+    STARTUPINFO info;
+    ZeroMemory(&info, sizeof(info));
+    info.cb = sizeof(info);
+
+    BOOL b = CreateProcessA(filename, nullptr, 0, 0, false, 0, environment.data(), nullptr, &info, &process);
+    REALM_ASSERT_RELEASE(b);
+
+    CloseHandle(process.hProcess);
+    CloseHandle(process.hThread);
+    return process.dwProcessId;
+}
+}
+#endif
+
 TEST(Shared_Unattached)
 {
     SharedGroup sg((SharedGroup::unattached_tag()));
@@ -136,7 +183,7 @@ void writer(std::string path, int id)
             if (i & 1) {
                 t1->add_int(0, id, 1);
             }
-            sched_yield(); // increase chance of signal arriving in the middle of a transaction
+            std::this_thread::yield(); // increase chance of signal arriving in the middle of a transaction
             wt.commit();
         }
         // std::cerr << "Ended pid " << getpid() << std::endl;
@@ -253,7 +300,7 @@ TEST_IF(Shared_PipelinedWritesWithKills, false)
         killer(test_context, pid, path, num_processes - 1);
     }
     // We need to wait cleaning up til the killed processes have exited.
-    sleep(1);
+    millisleep(1000);
 }
 #endif
 
@@ -280,7 +327,7 @@ TEST(Shared_CompactingOnTheFly)
             // make sure writer has started:
             bool waiting = true;
             while (waiting) {
-                sched_yield();
+                std::this_thread::yield();
                 ReadTransaction rt(sg);
                 auto t1 = rt.get_table("test");
                 waiting = t1->get_int(0, 41) == 0;
@@ -322,6 +369,38 @@ TEST(Shared_CompactingOnTheFly)
         CHECK_EQUAL(table->size(), 100);
         rt2.get_group().verify();
     }
+}
+
+TEST(Shared_EncryptedRemap)
+{
+    // Attempts to trigger code coverage in util::mremap() for the case where the file is encrypted.
+    // This requires a "non-encrypted database size" (not physical file sise) which is non-divisible
+    // by page_size() *and* is bigger than current allocated section. Following row count and payload
+    // seems to work on both Windows+Linux
+    const int64_t rows = 12;
+    SHARED_GROUP_TEST_PATH(path);
+    {
+        SharedGroup sg(path, false, SharedGroupOptions(crypt_key()));
+        // Create table entries
+
+        WriteTransaction wt(sg);
+        auto t1 = wt.add_table("test");
+        test_table_add_columns(t1);
+        std::string str(100000, 'a');
+        for (int64_t i = 0; i < rows; ++i) {
+            add(t1, 0, i, false, str.c_str());
+        }
+        wt.commit();
+    }
+
+    SharedGroup sg2(path, true, SharedGroupOptions(crypt_key()));
+
+    CHECK_EQUAL(true, sg2.compact());
+    ReadTransaction rt2(sg2);
+    auto table = rt2.get_table("test");
+    CHECK(table);
+    CHECK_EQUAL(table->size(), rows);
+    rt2.get_group().verify();
 }
 
 
@@ -585,6 +664,87 @@ TEST(Shared_1)
     }
 }
 
+
+TEST(Shared_try_begin_write)
+{
+    SHARED_GROUP_TEST_PATH(path);
+    // Create a new shared db
+    SharedGroup sg(path, false, SharedGroupOptions(crypt_key()));
+    std::mutex thread_obtains_write_lock;
+    std::condition_variable cv;
+    std::mutex cv_lock;
+    bool init_complete = false;
+
+    auto do_async = [&]() {
+        SharedGroup sg2(path, false, SharedGroupOptions(crypt_key()));
+        Group* gw = nullptr;
+        bool success = sg2.try_begin_write(gw);
+        CHECK(success);
+        CHECK(gw != nullptr);
+        {
+            std::lock_guard<std::mutex> lock(cv_lock);
+            init_complete = true;
+        }
+        cv.notify_one();
+        TableRef t = gw->add_table(StringData("table"));
+        t->insert_column(0, type_String, StringData("string_col"));
+        t->add_empty_row(1000);
+        thread_obtains_write_lock.lock();
+        sg2.commit();
+        thread_obtains_write_lock.unlock();
+    };
+
+    thread_obtains_write_lock.lock();
+    Thread async_writer;
+    async_writer.start(do_async);
+
+    // wait for the thread to start a write transaction
+    std::unique_lock<std::mutex> lock(cv_lock);
+    cv.wait(lock, [&]{ return init_complete; });
+
+    // Try to also obtain a write lock. This should fail but not block.
+    Group* g = nullptr;
+    bool success = sg.try_begin_write(g);
+    CHECK(!success);
+    CHECK(g == nullptr);
+
+    // Let the async thread finish its write transaction.
+    thread_obtains_write_lock.unlock();
+    async_writer.join();
+
+    {
+        // Verify that the thread transaction commit succeeded.
+        ReadTransaction rt(sg);
+        const Group& gr = rt.get_group();
+        ConstTableRef t = gr.get_table(0);
+        CHECK(t->get_name() == StringData("table"));
+        CHECK(t->get_column_name(0) == StringData("string_col"));
+        CHECK(t->size() == 1000);
+    }
+
+    // Now try to start a transaction without any contenders.
+    success = sg.try_begin_write(g);
+    CHECK(success);
+    CHECK(g != nullptr);
+
+    {
+        // make sure we still get a useful error message when trying to
+        // obtain two write locks on the same thread
+        CHECK_LOGIC_ERROR(sg.try_begin_write(g), LogicError::wrong_transact_state);
+    }
+
+    // Add some data and finish the transaction.
+    g->add_table(StringData("table 2"));
+    sg.commit();
+
+    {
+        // Verify that the main thread transaction now succeeded.
+        ReadTransaction rt(sg);
+        const Group& gr = rt.get_group();
+        CHECK(gr.size() == 2);
+        CHECK(gr.get_table(1)->get_name() == StringData("table 2"));
+    }
+}
 
 TEST(Shared_Rollback)
 {
@@ -1318,7 +1478,8 @@ TEST(Shared_RobustAgainstDeathDuringWrite)
 // not ios or android
 //#endif // defined TEST_ROBUSTNESS && defined ENABLE_ROBUST_AGAINST_DEATH_DURING_WRITE && !REALM_ENABLE_ENCRYPTION
 
-
+// Disabled because we do not support nested subtables ATM
+#if 0
 TEST(Shared_FormerErrorCase1)
 {
     SHARED_GROUP_TEST_PATH(path);
@@ -1455,7 +1616,7 @@ TEST(Shared_FormerErrorCase1)
         wt.commit();
     }
 }
-
+#endif
 
 TEST(Shared_FormerErrorCase2)
 {
@@ -1766,7 +1927,7 @@ TEST_IF(Shared_Async, allow_async)
 
     // Wait for async_commit process to shutdown
     // FIXME: we need a way to determine properly if the daemon has shot down instead of just sleeping
-    sleep(1);
+    millisleep(1000);
 
     // Read the db again in normal mode to verify
     {
@@ -1881,7 +2042,7 @@ void multiprocess_make_table(std::string path, std::string lock_path, std::strin
 #endif
     // Wait for async_commit process to shutdown
     // FIXME: No good way of doing this
-    sleep(1);
+    millisleep(1000);
 #else
     {
         Group g(alone_path, Group::mode_ReadWrite);
@@ -1937,7 +2098,7 @@ void multiprocess_validate_and_clear(TestContext& test_context, std::string path
     // Wait for async_commit process to shutdown
     // FIXME: this is not apropriate
     static_cast<void>(lock_path);
-    sleep(1);
+    millisleep(1000);
 
     // Verify - once more, in sync mode - that the changes were made
     {
@@ -1979,7 +2140,7 @@ TEST_IF(Shared_AsyncMultiprocess, allow_async)
     SHARED_GROUP_TEST_PATH(alone_path);
 
     // wait for any daemon hanging around to exit
-    usleep(100); // FIXME: Is this really acceptable?
+    millisleep(1); // FIXME: Is this really acceptable?
 
 #if TEST_DURATION < 1
     multiprocess_make_table(path, path.get_lock_path(), alone_path, 4);
@@ -2006,12 +2167,100 @@ TEST_IF(Shared_AsyncMultiprocess, allow_async)
 
 #endif // !defined(_WIN32) && !REALM_PLATFORM_APPLE
 
-#if !defined(_WIN32)
-// this test does not work with valgrind:
+#ifdef _WIN32
+
 #if 0
 
+TEST(Shared_WaitForChangeAfterOwnCommit)
+{
+    SHARED_GROUP_TEST_PATH(path);
+
+    SharedGroup* sg = new SharedGroup(path);
+    sg->begin_write();
+    sg->commit();
+    bool b = sg->wait_for_change();
+}
+
+#endif
+
+NONCONCURRENT_TEST(Shared_InterprocessWaitForChange)
+{
+    // We can't use SHARED_GROUP_TEST_PATH() because it will attempt to clean up the .realm file at the end,
+    // and hence throw if the other processstill has the .realm file open
+    std::string path = get_test_path("Shared_InterprocessWaitForChange", ".realm");
+
+    // This works differently from POSIX: Here, the child process begins execution from the start of this unit
+    // test and not from the place of fork().
+    DWORD pid = winfork("Shared_InterprocessWaitForChange");
+
+    if (pid == -1) {
+        CHECK(false);
+        return;
+    }
+
+    std::unique_ptr<SharedGroup> sg(new SharedGroup(path));
+
+    // An old .realm file with random contents can exist (such as a leftover from earlier crash) with random
+    // data, so we always initialize the database
+    {
+        Group& g = sg->begin_write();
+        if (g.size() == 1) {
+            g.remove_table("data");
+            TableRef table = g.add_table("data");
+            table->add_column(type_Int, "ints");
+            table->add_empty_row();
+            table->set_int(0, 0, 0);
+        }
+        sg->commit();
+        sg->wait_for_change();
+    }
+
+    bool first = false;
+    fastrand(time(0), true);
+
+    // By turn, incremenet the counter and wait for the other to increment it too
+    for (int i = 0; i < 10; i++)
+    {
+        Group& g = sg->begin_write();
+        if (g.size() == 1) {
+            TableRef table = g.get_table("data");
+            int64_t v = table->get_int(0, 0);
+
+            if (i == 0 && v == 0)
+                first = true;
+
+            // Note: If this fails in child process (pid != 0) it might go undetected. This is not
+            // critical since it will most likely result in a failure in the parent process also.
+            CHECK_EQUAL(v - (first ? 0 : 1), 2 * i);
+            table->set_int(0, 0, v + 1);
+        }
+
+        // millisleep(0) might yield time slice on certain OS'es, so we use fastrand() to get cases 
+        // of 0 delay, because non-yieldig is also an important test case.
+        if(fastrand(1))
+            millisleep((time(0) % 10) * 10);
+
+        sg->commit();
+
+        if (fastrand(1))
+            millisleep((time(0) % 10) * 10);
+
+        sg->wait_for_change();
+
+        if (fastrand(1))
+            millisleep((time(0) % 10) * 10);
+    }
+
+    // Wake up other process so it will exit too
+    sg->begin_write();
+    sg->commit();
+}
+
+#endif
+
+// This test does not work with valgrind
 // This test will hang infinitely instead of failing!!!
-TEST(Shared_WaitForChange)
+TEST_IF(Shared_WaitForChange, !running_with_valgrind)
 {
     const int num_threads = 3;
     Mutex mutex;
@@ -2134,10 +2383,6 @@ TEST(Shared_WaitForChange)
         sgs[j] = 0;
     }
 }
-
-
-#endif // test is disabled
-#endif // endif not on windows
 
 
 TEST(Shared_MultipleSharersOfStreamingFormat)
@@ -2306,6 +2551,61 @@ TEST(Shared_MixedWithNonShared)
     }
 #endif
 }
+
+
+#if REALM_ENABLE_ENCRYPTION
+// verify that even though different threads share the same encrypted pages,
+// a thread will not get access without the key.
+TEST(Shared_EncryptionKeyCheck)
+{
+    SHARED_GROUP_TEST_PATH(path);
+    SharedGroup sg(path, false, SharedGroupOptions(crypt_key(true)));
+    bool ok = false;
+    try {
+        SharedGroup sg_2(path, false, SharedGroupOptions());
+    } catch (std::runtime_error&) {
+        ok = true;
+    }
+    CHECK(ok);
+    SharedGroup sg3(path, false, SharedGroupOptions(crypt_key(true)));
+}
+
+// opposite - if opened unencrypted, attempt to share it encrypted
+// will throw an error.
+TEST(Shared_EncryptionKeyCheck_2)
+{
+    SHARED_GROUP_TEST_PATH(path);
+    SharedGroup sg(path, false, SharedGroupOptions());
+    bool ok = false;
+    try {
+        SharedGroup sg_2(path, false, SharedGroupOptions(crypt_key(true)));
+    } catch (std::runtime_error&) {
+        ok = true;
+    }
+    CHECK(ok);
+    SharedGroup sg3(path, false, SharedGroupOptions());
+}
+
+// if opened by one key, it cannot be opened by a different key
+TEST(Shared_EncryptionKeyCheck_3)
+{
+    SHARED_GROUP_TEST_PATH(path);
+    const char* first_key = crypt_key(true);
+    char second_key[64];
+    memcpy(second_key, first_key, 64);
+    second_key[3] = ~second_key[3];
+    SharedGroup sg(path, false, SharedGroupOptions(first_key));
+    bool ok = false;
+    try {
+        SharedGroup sg_2(path, false, SharedGroupOptions(second_key));
+    } catch (std::runtime_error&) {
+        ok = true;
+    }
+    CHECK(ok);
+    SharedGroup sg3(path, false, SharedGroupOptions(first_key));
+}
+
+#endif
 
 TEST(Shared_VersionCount)
 {
@@ -2966,6 +3266,64 @@ TEST(Shared_StaticFuzzTestRunSanityCheck)
     }
 }
 
+
+// This test checks what happens when a version is pinned and there are many
+// large write transactions that grow the file quickly. It takes a long time
+// and can make very very large files so it is not suited to automatic testing.
+TEST_IF(Shared_encrypted_pin_and_write, false)
+{
+    const size_t num_rows = 1000;
+    const size_t num_transactions = 1000000;
+    const size_t num_writer_threads = 8;
+    SHARED_GROUP_TEST_PATH(path);
+
+    { // initial table structure setup on main thread
+        SharedGroup sg(path, false, SharedGroupOptions(crypt_key(true)));
+        WriteTransaction wt(sg);
+        Group& group = wt.get_group();
+        TableRef t = group.add_table("table");
+        t->add_column(type_String, "string_col", true);
+        t->add_empty_row(num_rows);
+        wt.commit();
+    }
+
+    SharedGroup sg_reader(path, false, SharedGroupOptions(crypt_key(true)));
+    ReadTransaction rt(sg_reader); // hold first version
+
+    auto do_many_writes = [&]() {
+        SharedGroup sg(path, false, SharedGroupOptions(crypt_key(true)));
+        const size_t base_size = 100000;
+        std::string base(base_size, 'a');
+        // write many transactions to grow the file
+        // around 4.6 GB seems to be the breaking size
+        for (size_t t = 0; t < num_transactions; ++t) {
+            std::vector<std::string> rows(num_rows);
+            // change a character so there's no storage optimizations
+            for (size_t row = 0; row < num_rows; ++row) {
+                base[(t * num_rows + row)%base_size] = 'a' + (row % 52);
+                rows[row] = base;
+            }
+            WriteTransaction wt(sg);
+            Group& g = wt.get_group();
+            TableRef table = g.get_table(0);
+            for (size_t row = 0; row < num_rows; ++row) {
+                StringData c(rows[row]);
+                table->set_string(0, row, c);
+            }
+            wt.commit();
+        }
+    };
+
+    Thread threads[num_writer_threads];
+    for (size_t i = 0; i < num_writer_threads; ++i)
+        threads[i].start(do_many_writes);
+
+    for (size_t i = 0; i < num_writer_threads; ++i) {
+        threads[i].join();
+    }
+}
+
+
 // Scaled down stress test. (Use string length ~15MB for max stress)
 NONCONCURRENT_TEST(Shared_BigAllocations)
 {
@@ -3109,5 +3467,352 @@ NONCONCURRENT_TEST(SharedGroupOptions_tmp_dir)
 
     SharedGroupOptions::set_sys_tmp_dir(initial_system_dir);
 }
+
+
+namespace {
+
+void wait_for(size_t expected, std::mutex& mutex, size_t& test_value)
+{
+    while (true) {
+        millisleep(1);
+        std::lock_guard<std::mutex> guard(mutex);
+        if (test_value == expected) {
+            return;
+        }
+    }
+}
+
+} // end anonymous namespace
+
+TEST(Shared_LockFileInitSpinsOnZeroSize)
+{
+    SHARED_GROUP_TEST_PATH(path);
+
+    bool no_create = false;
+    SharedGroupOptions options;
+    options.encryption_key = crypt_key();
+    SharedGroup sg((SharedGroup::unattached_tag()));
+
+    sg.open(path, no_create, options);
+    sg.close();
+
+    CHECK(File::exists(path));
+    CHECK(File::exists(path.get_lock_path()));
+
+    std::mutex mutex;
+    size_t test_stage = 0;
+
+    Thread t;
+    auto do_async = [&]() {
+        File f(path.get_lock_path(), File::mode_Write);
+        f.lock_shared();
+        File::UnlockGuard ug(f);
+
+        CHECK(f.is_attached());
+
+        f.resize(0);
+        f.sync();
+
+        mutex.lock();
+        test_stage = 1;
+        mutex.unlock();
+
+        millisleep(100);
+        // the lock is then released and the other thread will be able to initialise properly
+    };
+    t.start(do_async);
+
+    wait_for(1, mutex, test_stage);
+
+    // we'll spin here without error until we can obtain the exclusive lock and initialise it ourselves
+    sg.open(path, no_create, options);
+    CHECK(sg.is_attached());
+    sg.close();
+
+    t.join();
+}
+
+
+TEST(Shared_LockFileSpinsOnInitComplete)
+{
+    SHARED_GROUP_TEST_PATH(path);
+
+    bool no_create = false;
+    SharedGroupOptions options;
+    options.encryption_key = crypt_key();
+    SharedGroup sg((SharedGroup::unattached_tag()));
+
+    sg.open(path, no_create, options);
+    sg.close();
+
+    CHECK(File::exists(path));
+    CHECK(File::exists(path.get_lock_path()));
+
+    std::mutex mutex;
+    size_t test_stage = 0;
+
+    Thread t;
+    auto do_async = [&]() {
+        File f(path.get_lock_path(), File::mode_Write);
+        f.lock_shared();
+        File::UnlockGuard ug(f);
+
+        CHECK(f.is_attached());
+
+        f.resize(1); // ftruncate will write 0 to init_complete
+        f.sync();
+
+        mutex.lock();
+        test_stage = 1;
+        mutex.unlock();
+
+        millisleep(100);
+        // the lock is then released and the other thread will be able to initialise properly
+    };
+    t.start(do_async);
+
+    wait_for(1, mutex, test_stage);
+
+    // we'll spin here without error until we can obtain the exclusive lock and initialise it ourselves
+    sg.open(path, no_create, options);
+    CHECK(sg.is_attached());
+    sg.close();
+
+    t.join();
+}
+
+
+TEST(Shared_LockFileOfWrongSizeThrows)
+{
+    // NOTE: This unit test attempts to mimic the initialization of the .lock file as it takes place inside
+    // the SharedGroup::do_open() method. NOTE: If the layout of SharedGroup::SharedInfo should change,
+    // this unit test might stop working.
+
+    SHARED_GROUP_TEST_PATH(path);
+
+    bool no_create = false;
+    SharedGroupOptions options;
+    options.encryption_key = crypt_key();
+    SharedGroup sg((SharedGroup::unattached_tag()));
+
+    sg.open(path, no_create, options);
+    sg.close();
+
+    CHECK(File::exists(path));
+    CHECK(File::exists(path.get_lock_path()));
+
+    std::mutex mutex;
+    size_t test_stage = 0;
+
+    Thread t;
+    auto do_async = [&]() {
+        File f(path.get_lock_path(), File::mode_Write);
+        f.lock_shared();
+        File::UnlockGuard ug(f);
+
+        CHECK(f.is_attached());
+
+        size_t wrong_size = 100; // < sizeof(SharedInfo)
+        f.resize(wrong_size); // ftruncate will fill with 0, which will set the init_complete flag to 0.
+        f.seek(0);
+    
+        // On Windows, we implement a shared lock on a file by locking the first byte of the file. Since
+        // you cannot write to a locked region using WriteFile(), we use memory mapping which works fine, and
+        // which is also the same method used by the .lock file initialization in SharedGroup::do_open()
+        char* mem = static_cast<char*>(f.map(realm::util::File::access_ReadWrite, 1));      
+
+        // set init_complete flag to 1 and sync
+        mem[0] = 1;
+        f.sync();
+
+        CHECK_EQUAL(f.get_size(), wrong_size);
+
+        mutex.lock();
+        test_stage = 1;
+        mutex.unlock();
+
+        wait_for(2, mutex, test_stage); // hold the lock until other thread finished an open attempt
+    };
+    t.start(do_async);
+
+    wait_for(1, mutex, test_stage);
+
+    // we expect to throw if init_complete = 1 but the file is not the expected size (< sizeof(SharedInfo))
+    // we go through 10 retry attempts before throwing
+    CHECK_THROW(sg.open(path, no_create, options), IncompatibleLockFile);
+    CHECK(!sg.is_attached());
+
+    mutex.lock();
+    test_stage = 2;
+    mutex.unlock();
+
+    t.join();
+}
+
+
+TEST(Shared_LockFileOfWrongVersionThrows)
+{
+    SHARED_GROUP_TEST_PATH(path);
+
+    bool no_create = false;
+    SharedGroupOptions options;
+    options.encryption_key = crypt_key();
+    SharedGroup sg((SharedGroup::unattached_tag()));
+
+    sg.open(path, no_create, options);
+
+    CHECK(File::exists(path));
+    CHECK(File::exists(path.get_lock_path()));
+
+    std::mutex mutex;
+    size_t test_stage = 0;
+
+    Thread t;
+    auto do_async = [&]() {
+        CHECK(File::exists(path.get_lock_path()));
+
+        File f;
+        f.open(path.get_lock_path(), File::access_ReadWrite, File::create_Auto, 0); // Throws
+
+        f.lock_shared();
+        File::UnlockGuard ug(f);
+
+        CHECK(f.is_attached());
+        f.seek(6);
+        char bad_version = 0;
+        f.write(&bad_version, 1);
+        f.sync();
+
+        mutex.lock();
+        test_stage = 1;
+        mutex.unlock();
+
+        wait_for(2, mutex, test_stage); // hold the lock until other thread finished an open attempt
+    };
+    t.start(do_async);
+
+    wait_for(1, mutex, test_stage);
+    sg.close();
+
+    // we expect to throw if info->shared_info_version != g_shared_info_version
+    CHECK_THROW(sg.open(path, no_create, options), IncompatibleLockFile);
+    CHECK(!sg.is_attached());
+
+    mutex.lock();
+    test_stage = 2;
+    mutex.unlock();
+
+    t.join();
+}
+
+
+TEST(Shared_LockFileOfWrongMutexSizeThrows)
+{
+    SHARED_GROUP_TEST_PATH(path);
+
+    bool no_create = false;
+    SharedGroupOptions options;
+    options.encryption_key = crypt_key();
+    SharedGroup sg((SharedGroup::unattached_tag()));
+
+    sg.open(path, no_create, options);
+
+    CHECK(File::exists(path));
+    CHECK(File::exists(path.get_lock_path()));
+
+    std::mutex mutex;
+    size_t test_stage = 0;
+
+    Thread t;
+    auto do_async = [&]() {
+        File f;
+        f.open(path.get_lock_path(), File::access_ReadWrite, File::create_Auto, 0); // Throws
+        f.lock_shared();
+        File::UnlockGuard ug(f);
+
+        CHECK(f.is_attached());
+
+        char bad_mutex_size = sizeof(InterprocessMutex::SharedPart) + 1;
+        f.seek(1);
+        f.write(&bad_mutex_size, 1);
+        f.sync();
+
+        mutex.lock();
+        test_stage = 1;
+        mutex.unlock();
+
+        wait_for(2, mutex, test_stage); // hold the lock until other thread finished an open attempt
+    };
+    t.start(do_async);
+
+    wait_for(1, mutex, test_stage);
+
+    sg.close();
+
+    // we expect to throw if the mutex size is incorrect
+    CHECK_THROW(sg.open(path, no_create, options), IncompatibleLockFile);
+    CHECK(!sg.is_attached());
+
+    mutex.lock();
+    test_stage = 2;
+    mutex.unlock();
+
+    t.join();
+}
+
+
+TEST(Shared_LockFileOfWrongCondvarSizeThrows)
+{
+    SHARED_GROUP_TEST_PATH(path);
+
+    bool no_create = false;
+    SharedGroupOptions options;
+    options.encryption_key = crypt_key();
+    SharedGroup sg((SharedGroup::unattached_tag()));
+
+    sg.open(path, no_create, options);
+
+    CHECK(File::exists(path));
+    CHECK(File::exists(path.get_lock_path()));
+
+    std::mutex mutex;
+    size_t test_stage = 0;
+
+    Thread t;
+    auto do_async = [&]() {
+        File f;
+        f.open(path.get_lock_path(), File::access_ReadWrite, File::create_Auto, 0); // Throws
+        f.lock_shared();
+        File::UnlockGuard ug(f);
+
+        CHECK(f.is_attached());
+
+        char bad_condvar_size = sizeof(InterprocessCondVar::SharedPart) + 1;
+        f.seek(2);
+        f.write(&bad_condvar_size, 1);
+        f.sync();
+
+        mutex.lock();
+        test_stage = 1;
+        mutex.unlock();
+
+        wait_for(2, mutex, test_stage); // hold the lock until other thread finished an open attempt
+    };
+    t.start(do_async);
+
+    wait_for(1, mutex, test_stage);
+    sg.close();
+
+    // we expect to throw if the condvar size is incorrect
+    CHECK_THROW(sg.open(path, no_create, options), IncompatibleLockFile);
+    CHECK(!sg.is_attached());
+
+    mutex.lock();
+    test_stage = 2;
+    mutex.unlock();
+
+    t.join();
+}
+
 
 #endif // TEST_SHARED

@@ -266,7 +266,7 @@ TEST(Table_DateTimeMinMax)
     // We test different code paths of the internal Core minmax method. First a null value as initial "best candidate",
     // then non-null first. For each case we then try both a substitution of best candidate, then non-substitution. 4
     // permutations in total.
-    
+
     table->add_empty_row(3);
     table->set_null(0, 0);
     table->set_timestamp(0, 1, {0, 0});
@@ -697,7 +697,7 @@ TEST(Table_AggregateFuzz)
             ts = table.get()->where().maximum_timestamp(0, &ret);
             CHECK_EQUAL(ret, largest_pos);
             if (largest_pos != npos)
-                CHECK_EQUAL(ts, table.get()->get_timestamp(0, largest_pos)); 
+                CHECK_EQUAL(ts, table.get()->get_timestamp(0, largest_pos));
 
             // TableView::min
             ret = 123;
@@ -1392,6 +1392,35 @@ TEST(Table_MoveAllTypes)
     }
 }
 
+TEST(Table_SubtableNull)
+{
+    Table parent;
+
+    {
+        DescriptorRef subdescr;
+        parent.add_column(type_Table, "integers", true, &subdescr);
+        subdescr->add_column(type_Int, "list");
+    }
+
+    parent.add_empty_row(2);
+    CHECK(parent.is_null(0, 0));
+    parent.get_subtable(0, 0)->add_empty_row(0);
+    TableRef table = parent.get_subtable(0, 1); // Preserve accessor
+    CHECK(table->is_attached());
+    CHECK(table->is_degenerate());
+    table->add_empty_row(0);
+    CHECK(!table->is_degenerate());
+    CHECK(!parent.is_null(0, 0));
+    CHECK(!parent.is_null(0, 1));
+    CHECK(table->is_attached());
+    parent.set_null(0, 0);
+    parent.set_null(0, 1);
+    CHECK(parent.is_null(0, 0));
+    CHECK(parent.is_null(0, 1));
+    CHECK(table->is_attached());
+    CHECK(table->is_degenerate());
+}
+
 
 TEST(Table_DegenerateSubtableSearchAndAggregate)
 {
@@ -1533,6 +1562,30 @@ TEST(Table_DegenerateSubtableSearchAndAggregate)
     size_t res;
     degen_child->where().equal(5, "hello").average_int(0, &res);
     CHECK_EQUAL(0, res);
+}
+
+TEST(Table_SpecUpdateWhenInsertingTable)
+{
+    Group g;
+
+    TableRef table_first = g.add_table("first");
+    TableRef table_second = g.add_table("second");
+
+    DescriptorRef subdescr;
+    table_first->add_column(type_Table, "subtables", true, &subdescr);
+    subdescr->add_column(type_Int, "integers", nullptr, false);
+    table_first->add_empty_row(5);
+
+    table_second->add_column_link(type_Link, "links", *table_first);
+
+    TableRef sub = table_first->get_subtable(0, 2);
+    sub->clear();
+    sub->add_empty_row(1);
+
+    g.insert_table(0, "third");
+    sub->set_int(0, 0, 1, false);
+
+    g.verify();
 }
 
 TEST(Table_Range)
@@ -2815,6 +2868,222 @@ TEST(Table_Spec)
     }
 }
 
+TEST(Table_SubtableIndex)
+{
+    GROUP_TEST_PATH(path);
+
+    {
+        Group group;
+        DescriptorRef sub_1;
+        TableRef table = group.add_table("test");
+
+        // Create specification with sub-table
+        table->add_column(type_String, "first");
+        table->add_column(type_Table, "second", &sub_1);
+
+        sub_1->add_column(type_Int, "sub_first");
+        sub_1->add_column(type_String, "sub_second");
+
+        // Add search index to `degenerate` subtable (subtable which does not yet exist because it has
+        // no rows yet, so it's just a 0-ref in the ColumnTable object). Important to test because the
+        // search index is then constructed in a different place in the source code
+        sub_1->add_search_index(0);
+        CHECK(sub_1->has_search_index(0));
+        sub_1->remove_search_index(0);
+        CHECK(!sub_1->has_search_index(0));
+        sub_1->add_search_index(0);
+        CHECK(sub_1->has_search_index(0));
+
+        CHECK_EQUAL(2, table->get_column_count());
+
+        // Add two rows to parent table
+        table->add_empty_row();
+        table->add_empty_row();
+        table->set_string(0, 0, "Hello");
+
+        // Add rows to first subtable
+        TableRef subtable = table->get_subtable(1, 0);
+        CHECK(subtable->is_empty());
+        subtable->add_empty_row();
+        subtable->set_int(0, 0, 42);
+        subtable->set_string(1, 0, "testsub1");
+        subtable->add_empty_row();
+        subtable->set_int(0, 1, 43);
+        subtable->set_string(1, 1, "testsub2");
+        CHECK_THROW_ANY(subtable->remove_search_index(0));
+        CHECK_THROW_ANY(subtable->add_search_index(0));
+
+        // Add rows to second subtable
+        subtable = table->get_subtable(1, 1);
+        CHECK(subtable->is_empty());
+        subtable->add_empty_row();
+        subtable->set_int(0, 0, 66);
+        subtable->set_string(1, 0, "testsub3");
+        subtable->add_empty_row();
+        subtable->set_int(0, 1, 77);
+        subtable->set_string(1, 1, "testsub4");
+
+        int64_t tt = subtable.get()->get_int(0, 0);
+        CHECK_EQUAL(tt, 66);
+
+        subtable = table->get_subtable(1, 0);
+        CHECK(subtable.get()->has_search_index(0));
+
+        size_t match;
+
+        match = subtable.get()->where().equal(0, 43).find();
+        CHECK_EQUAL(match, 1);
+        match = subtable.get()->where().equal(1, "testsub2").find();
+        CHECK_EQUAL(match, 1);
+
+        // group.verify();
+        // group.to_dot("group.dot");
+
+        subtable = table->get_subtable(1, 1);
+
+        match = subtable.get()->where().equal(0, 77).find();
+        CHECK_EQUAL(match, 1);
+
+        // Query column that follows indexed column to test if refresh_column_accessors()
+        // has worked
+        match = subtable.get()->where().equal(1, "testsub4").find();
+        CHECK_EQUAL(match, 1);
+
+        sub_1->remove_search_index(1);
+        CHECK(!subtable.get()->has_search_index(1));
+
+        // Query column that follows indexed column to test if refresh_column_accessors()
+        // has worked
+        match = subtable.get()->where().equal(1, "testsub4").find();
+        CHECK_EQUAL(match, 1);
+
+
+        match = subtable.get()->where().equal(0, 77).find();
+        CHECK_EQUAL(match, 1);
+
+        // Tests non-degenerate construction of index
+        sub_1->add_search_index(1);
+
+        match = subtable.get()->where().equal(0, 77).find();
+        CHECK_EQUAL(match, 1);
+        match = subtable.get()->where().equal(1, "testsub4").find();
+        CHECK_EQUAL(match, 1);
+
+        // Add more data and see if that works
+        subtable.get()->add_empty_row();
+        match = subtable.get()->where().equal(0, 0).find();
+        CHECK_EQUAL(match, 2);
+
+        group.write(path);
+    }
+
+    {
+        // Check persistence
+        Group g2(path);
+        DescriptorRef sub_1;
+        TableRef table = g2.get_table("test");
+
+        TableRef subtable = table->get_subtable(1, 0);
+        CHECK(subtable.get()->has_search_index(0));
+
+        size_t match;
+
+        match = subtable.get()->where().equal(0, 43).find();
+        CHECK_EQUAL(match, 1);
+        match = subtable.get()->where().equal(1, "testsub2").find();
+        CHECK_EQUAL(match, 1);
+
+        subtable = table->get_subtable(1, 1);
+
+        match = subtable.get()->where().equal(0, 77).find();
+        CHECK_EQUAL(match, 1);
+        match = subtable.get()->where().equal(1, "testsub4").find();
+        CHECK_EQUAL(match, 1);
+
+        DescriptorRef subsub;
+        DescriptorRef sub = table.get()->get_subdescriptor(1);
+        sub->add_column(type_Table, "foobar", &subsub);
+        CHECK_THROW_ANY(subsub->add_search_index(0));
+    }
+
+    {
+        // Check that you are not allowed to add index to subtable of subtable
+        Group g2(path);
+        DescriptorRef sub_1;
+        TableRef table = g2.get_table("test");
+        DescriptorRef subsub;
+        DescriptorRef sub = table.get()->get_subdescriptor(1);
+        sub->add_column(type_Table, "baz", &subsub);
+        CHECK_THROW_ANY(subsub->add_search_index(0));
+    }
+
+    {
+        // Check correct updating of other subtable accessors than the one you called add_search_index() on
+        Group g2(path);
+        DescriptorRef des;
+        TableRef table = g2.get_table("test");
+        TableRef sub1 = table->get_subtable(1, 0);
+        TableRef sub2 = table->get_subtable(1, 1);
+
+        size_t match;
+
+        des = table->get_subdescriptor(1);
+
+        des->remove_search_index(0);
+
+        CHECK(!sub1->has_search_index(0));
+        match = sub1->where().equal(1, "testsub2").find();
+        CHECK_EQUAL(match, 1);
+
+        CHECK(!sub2->has_search_index(0));
+        match = sub2->where().equal(1, "testsub4").find();
+        CHECK_EQUAL(match, 1);
+
+        des->add_search_index(0);
+
+        CHECK(sub1->has_search_index(0));
+        match = sub1->where().equal(1, "testsub2").find();
+        CHECK_EQUAL(match, 1);
+
+        CHECK(sub2->has_search_index(0));
+        match = sub2->where().equal(1, "testsub4").find();
+        CHECK_EQUAL(match, 1);
+
+        // Check what happens if user given column index is out of range
+        CHECK_THROW(des->add_search_index(100), LogicError);
+        CHECK_THROW(des->remove_search_index(100), LogicError);
+        CHECK(!des->has_search_index(100));
+    }
+}
+
+TEST(LangBindHelper_SubtableSizeIncorrect)
+{
+    // Based on finding from AFL
+    // Problem was that creating a subtable if both search index and nullable flag
+    // was set in column attributes would clear the nullable flag. This would prevent
+    // accessors to already existing subtables to be created correctly (IntegerColumn on
+    // a IntNullColumn structure).
+    Table table;
+    DescriptorRef subdescr;
+    table.add_column(type_Table, "col", true, &subdescr);
+    // add int column that is nullable
+    subdescr->add_column(type_Int, "integers", nullptr, true);
+    table.add_empty_row(2);
+    // Create subtable entry
+    table.get_subtable(0, 1)->clear();
+    // Now we have one degenerate and one proper table
+    table.get_subdescriptor(0)->add_search_index(0);
+    table.add_empty_row();
+
+    // Before the fix this operation cleared the nullable flag in the spec
+    table.get_subtable(0, 2)->clear();
+    // Create subtable accessor
+    TableRef sub1 = table.get_subtable(0, 1);
+    CHECK_EQUAL(sub1->size(), 0);
+    sub1->add_empty_row(1);
+    sub1->set_int(0, 0, 7, false);
+}
+
 TEST(Table_SpecColumnPath)
 {
     Group group;
@@ -3752,6 +4021,8 @@ void my_table_3_add_columns(T t)
 
 } // anonymous namespace
 
+// Disabled because we do not support nested subtables ATM
+#if 0
 TEST(Table_HighLevelSubtables)
 {
     Table t;
@@ -3805,7 +4076,7 @@ TEST(Table_HighLevelSubtables)
     t.get_subtable(0, 0)->set_int(0, 0, 1);
     CHECK_EQUAL(t.get_subtable(0, 0)->get_int(0, 0), 1);
 }
-
+#endif
 
 TEST(Table_SubtableCopyOnSetAndInsert)
 {
@@ -5989,6 +6260,10 @@ TEST(Table_RowAccessorLinks)
     CHECK(source_row_2.linklist_is_empty(1));
     CHECK_EQUAL(0, source_row_1.get_link_count(1));
     CHECK_EQUAL(0, source_row_2.get_link_count(1));
+    CHECK_EQUAL(0, target_table->get(7).get_backlink_count());
+    CHECK_EQUAL(0, target_table->get(13).get_backlink_count());
+    CHECK_EQUAL(0, target_table->get(11).get_backlink_count());
+    CHECK_EQUAL(0, target_table->get(15).get_backlink_count());
     CHECK_EQUAL(0, target_table->get(7).get_backlink_count(*origin_table, 0));
     CHECK_EQUAL(0, target_table->get(13).get_backlink_count(*origin_table, 0));
     CHECK_EQUAL(0, target_table->get(11).get_backlink_count(*origin_table, 1));
@@ -6024,12 +6299,18 @@ TEST(Table_RowAccessorLinks)
     CHECK(!source_row_2.linklist_is_empty(1));
     CHECK_EQUAL(1, source_row_1.get_link_count(1));
     CHECK_EQUAL(2, source_row_2.get_link_count(1));
+    CHECK_EQUAL(1, target_table->get(11).get_backlink_count());
+    CHECK_EQUAL(2, target_table->get(15).get_backlink_count());
     CHECK_EQUAL(1, target_table->get(11).get_backlink_count(*origin_table, 1));
     CHECK_EQUAL(2, target_table->get(15).get_backlink_count(*origin_table, 1));
     CHECK_EQUAL(1, target_table->get(11).get_backlink(*origin_table, 1, 0));
     size_t back_link_1 = target_table->get(15).get_backlink(*origin_table, 1, 0);
     size_t back_link_2 = target_table->get(15).get_backlink(*origin_table, 1, 1);
     CHECK((back_link_1 == 0 && back_link_2 == 1) || (back_link_1 == 1 && back_link_2 == 0));
+
+    // Links from multiple columns (count total)
+    source_row_1.set_link(0, 15);
+    CHECK_EQUAL(3, target_table->get(15).get_backlink_count());
 
     // Clear link lists
     link_list_1->clear();
@@ -6880,6 +7161,180 @@ TEST(Table_MultipleLinkColumnsMoveTablesCrossLinks)
 }
 
 
+TEST(Table_MoveEnumColumns)
+{
+    Table t;
+    t.add_column(type_String, "0");
+    t.add_column(type_String, "1");
+    t.add_empty_row(1);
+    t.set_string(0, 0, "hello");
+    t.set_string(1, 0, "world");
+    bool enforce = true;
+    t.optimize(enforce);
+
+    CHECK(t.get_string(0, 0) == "hello");
+    CHECK(t.get_string(1, 0) == "world");
+    t.verify();
+    _impl::TableFriend::move_column(*t.get_descriptor(), 1, 0);
+    CHECK(t.get_string(0, 0) == "world");
+    CHECK(t.get_string(1, 0) == "hello");
+    t.verify();
+    _impl::TableFriend::move_column(*t.get_descriptor(), 0, 1);
+    CHECK(t.get_string(0, 0) == "hello");
+    CHECK(t.get_string(1, 0) == "world");
+    t.verify();
+    _impl::TableFriend::move_column(*t.get_descriptor(), 1, 1);
+    CHECK(t.get_string(0, 0) == "hello");
+    CHECK(t.get_string(1, 0) == "world");
+    t.verify();
+}
+
+
+TEST(LangBindHelper_StringEnumMoveOutOfBounds)
+{
+    Table t;
+    t.add_column(type_String, "str_col");
+    t.add_empty_row(1);
+    bool enforce = true;
+    t.optimize(enforce);
+    t.add_column(type_String, "str_col2");
+    StringData enum_0("enum 0");
+    StringData str_1("string 1");
+    StringData str_2("string 2");
+    StringData enum_1("enum 1");
+    StringData enum_2("enum 2");
+    t.set_string(0, 0, enum_0);
+    t.set_string(1, 0, str_1);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 0, 1);
+    t.verify();
+    CHECK(t.get_string(0, 0) == str_1);
+    CHECK(t.get_string(1, 0) == enum_0);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 1, 1);
+    t.verify();
+    CHECK(t.get_string(0, 0) == str_1);
+    CHECK(t.get_string(1, 0) == enum_0);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 0, 0);
+    t.verify();
+    CHECK(t.get_string(0, 0) == str_1);
+    CHECK(t.get_string(1, 0) == enum_0);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 1, 0);
+    t.verify();
+    CHECK(t.get_string(0, 0) == enum_0);
+    CHECK(t.get_string(1, 0) == str_1);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 1, 0);
+    t.verify();
+    CHECK(t.get_string(0, 0) == str_1);
+    CHECK(t.get_string(1, 0) == enum_0);
+
+    t.optimize(enforce);
+    t.add_column(type_String, "str_col3");
+    t.set_string(0, 0, enum_1);
+    t.set_string(2, 0, str_2);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 2, 1);
+    t.verify();
+    CHECK(t.get_string(0, 0) == enum_1);
+    CHECK(t.get_string(1, 0) == str_2);
+    CHECK(t.get_string(2, 0) == enum_0);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 2, 1);
+    t.verify();
+    CHECK(t.get_string(0, 0) == enum_1);
+    CHECK(t.get_string(1, 0) == enum_0);
+    CHECK(t.get_string(2, 0) == str_2);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 0, 2);
+    t.verify();
+    CHECK(t.get_string(0, 0) == enum_0);
+    CHECK(t.get_string(1, 0) == str_2);
+    CHECK(t.get_string(2, 0) == enum_1);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 0, 2);
+    t.verify();
+    CHECK(t.get_string(0, 0) == str_2);
+    CHECK(t.get_string(1, 0) == enum_1);
+    CHECK(t.get_string(2, 0) == enum_0);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 2, 0);
+    t.verify();
+    CHECK(t.get_string(0, 0) == enum_0);
+    CHECK(t.get_string(1, 0) == str_2);
+    CHECK(t.get_string(2, 0) == enum_1);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 0, 2);
+    t.verify();
+    CHECK(t.get_string(0, 0) == str_2);
+    CHECK(t.get_string(1, 0) == enum_1);
+    CHECK(t.get_string(2, 0) == enum_0);
+
+    t.optimize(enforce);
+    t.set_string(0, 0, enum_2);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 0, 2);
+    t.verify();
+    CHECK(t.get_string(0, 0) == enum_1);
+    CHECK(t.get_string(1, 0) == enum_0);
+    CHECK(t.get_string(2, 0) == enum_2);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 2, 0);
+    t.verify();
+    CHECK(t.get_string(0, 0) == enum_2);
+    CHECK(t.get_string(1, 0) == enum_1);
+    CHECK(t.get_string(2, 0) == enum_0);
+
+    _impl::TableFriend::move_column(*(t.get_descriptor()), 1, 2);
+    t.verify();
+    CHECK(t.get_string(0, 0) == enum_2);
+    CHECK(t.get_string(1, 0) == enum_0);
+    CHECK(t.get_string(2, 0) == enum_1);
+}
+
+
+TEST(Table_MoveSubtables)
+{
+    Group g;
+    TableRef t = g.add_table("A");
+    TableRef t2 = g.add_table("B");
+    {
+        DescriptorRef subdesc;
+
+        t->add_column(type_Table, "sub1", &subdesc);
+        subdesc->add_column(type_Int, "integers");
+
+        t->add_column_link(type_Link, "link", *t2);
+
+        t->add_column(type_Table, "sub2", &subdesc);
+        subdesc->add_column(type_String, "strings");
+    }
+
+    {
+        DescriptorRef sub1 = t->get_subdescriptor(0);
+        DescriptorRef sub2 = t->get_subdescriptor(2);
+        CHECK_EQUAL(sub1->get_column_name(0), "integers");
+        CHECK_EQUAL(sub2->get_column_name(0), "strings");
+    }
+    _impl::TableFriend::move_column(*t->get_descriptor(), 0, 2);
+    {
+        DescriptorRef sub1 = t->get_subdescriptor(2);
+        DescriptorRef sub2 = t->get_subdescriptor(1);
+        CHECK_EQUAL(sub1->get_column_name(0), "integers");
+        CHECK_EQUAL(sub2->get_column_name(0), "strings");
+    }
+    _impl::TableFriend::move_column(*t->get_descriptor(), 2, 0);
+    {
+        DescriptorRef sub1 = t->get_subdescriptor(0);
+        DescriptorRef sub2 = t->get_subdescriptor(2);
+        CHECK_EQUAL(sub1->get_column_name(0), "integers");
+        CHECK_EQUAL(sub2->get_column_name(0), "strings");
+    }
+}
+
+
 TEST(Table_AddColumnWithThreeLevelBptree)
 {
     Table table;
@@ -6921,6 +7376,55 @@ TEST(Table_IndexStringDelete)
     }
 }
 
+TEST(Table_NullableChecks)
+{
+    Table t;
+    TableView tv;
+    constexpr bool nullable = true;
+    size_t str_col = t.add_column(type_String, "str", nullable);
+    size_t int_col = t.add_column(type_Int, "int", nullable);
+    size_t bool_col = t.add_column(type_Bool, "bool", nullable);
+    size_t ts_col = t.add_column(type_Timestamp, "timestamp", nullable);
+    size_t float_col = t.add_column(type_Float, "float", nullable);
+    size_t double_col = t.add_column(type_Double, "double", nullable);
+    size_t binary_col = t.add_column(type_Binary, "binary", nullable);
+
+    t.add_empty_row();
+    StringData sd; // construct a null reference
+    Timestamp ts; // null
+    BinaryData bd;; // null
+    t.set(str_col, 0, sd);
+    t.set(int_col, 0, realm::null());
+    t.set(bool_col, 0, realm::null());
+    t.set(ts_col, 0, ts);
+    t.set(float_col, 0, realm::null());
+    t.set(double_col, 0, realm::null());
+    t.set(binary_col, 0, bd);
+
+    // is_null is always reliable regardless of type
+    CHECK(t.is_null(str_col, 0));
+    CHECK(t.is_null(int_col, 0));
+    CHECK(t.is_null(bool_col, 0));
+    CHECK(t.is_null(ts_col, 0));
+    CHECK(t.is_null(float_col, 0));
+    CHECK(t.is_null(double_col, 0));
+    CHECK(t.is_null(binary_col, 0));
+
+    StringData str0 = t.get_string(str_col, 0);
+    CHECK(str0.is_null());
+    util::Optional<int64_t> int0 = t.get<util::Optional<int64_t>>(int_col, 0);
+    CHECK(!int0);
+    util::Optional<bool> bool0 = t.get<util::Optional<bool>>(bool_col, 0);
+    CHECK(!bool0);
+    Timestamp ts0 = t.get_timestamp(ts_col, 0);
+    CHECK(ts0.is_null());
+    util::Optional<float> float0 = t.get<util::Optional<float>>(float_col, 0);
+    CHECK(!float0);
+    util::Optional<double> double0 = t.get<util::Optional<double>>(double_col, 0);
+    CHECK(!double0);
+    BinaryData binary0 = t.get_binary(binary_col, 0);
+    CHECK(binary0.is_null());
+}
 
 TEST(Table_Nulls)
 {
@@ -7366,6 +7870,380 @@ TEST(Table_MixedCrashValues)
 }
 
 
+TEST(Table_MoveRow)
+{
+    Group g;
+
+    // The things which need to be validated for moving rows:
+    // 1. Values are moved
+    // 2. Outgoing links/linklists to moved rows are updated
+    // 3. Backlinks to moved rows are updated
+    // 4. Row, LinkView and Subtable accessors for moved rows are updated
+    // 5. TableViews containing moved rows are updated
+
+    TableRef t0 = g.add_table("t0");
+    size_t col_value = t0->add_column(type_Int, "value");
+    size_t col_link = t0->add_column_link(type_Link, "self link", *t0);
+    size_t col_linklist = t0->add_column_link(type_LinkList, "self linklist", *t0);
+    size_t col_table = t0->add_column(type_Table, "subtable");
+    t0->get_subdescriptor(col_table)->add_column(type_Int, "value");
+
+    TableRef t1 = g.add_table("t1");
+    t1->add_column_link(type_Link, "link", *t0);
+    t1->add_column_link(type_LinkList, "linklist", *t0);
+
+    Row rows[5];
+    LinkViewRef t0_lvs[5];
+    LinkViewRef t1_lvs[5];
+    TableRef t0_subtables[5];
+
+    t0->add_empty_row(5);
+    t1->add_empty_row(5);
+    for (int i = 0; i < 5; ++i) {
+        rows[i] = t0->get(i);
+        t0_lvs[i] = t0->get_linklist(col_linklist, i);
+        t1_lvs[i] = t1->get_linklist(1, i);
+        t0_subtables[i] = t0->get_subtable(col_table, i);
+
+        t0->set_int(col_value, i, i);
+        t0->set_link(col_link, i, i);
+        for (int j = 0; j < 5; ++j) {
+            if (i != j)
+                t0_lvs[i]->add(j);
+        }
+        t0_subtables[i]->add_empty_row(i + 1);
+
+        t1->set_link(0, i, (i + 1) % 5);
+        t1_lvs[i]->add((i + 2) % 5);
+    }
+
+    TableView tv = t0->where().find_all();
+
+    CHECK_EQUAL(t1_lvs[0]->get(0).get_index(), 2);
+    CHECK_EQUAL(t1_lvs[1]->get(0).get_index(), 3);
+    CHECK_EQUAL(t1_lvs[2]->get(0).get_index(), 4);
+    CHECK_EQUAL(t1_lvs[3]->get(0).get_index(), 0);
+    CHECK_EQUAL(t1_lvs[4]->get(0).get_index(), 1);
+
+    // move from == to
+    t0->move_row(1, 1);
+    for (int i = 0; i < 5; ++i)
+        CHECK_EQUAL(t0->get_int(col_value, i), i);
+
+    // swap adjacent, from < to
+    t0->move_row(1, 2);
+    // 0, 2, 1, 3, 4
+
+    CHECK_EQUAL(rows[0].get_index(), 0);
+    CHECK_EQUAL(rows[1].get_index(), 2);
+    CHECK_EQUAL(rows[2].get_index(), 1);
+    CHECK_EQUAL(rows[3].get_index(), 3);
+    CHECK_EQUAL(rows[4].get_index(), 4);
+
+    CHECK_EQUAL(rows[0].get_int(col_value), 0);
+    CHECK_EQUAL(rows[1].get_int(col_value), 1);
+    CHECK_EQUAL(rows[2].get_int(col_value), 2);
+    CHECK_EQUAL(rows[3].get_int(col_value), 3);
+
+    CHECK_EQUAL(rows[0].get_link(col_link), 0);
+    CHECK_EQUAL(rows[1].get_link(col_link), 2);
+    CHECK_EQUAL(rows[2].get_link(col_link), 1);
+    CHECK_EQUAL(rows[3].get_link(col_link), 3);
+
+    CHECK_EQUAL(t0_lvs[0]->get(0).get_index(), 2);
+    CHECK_EQUAL(t0_lvs[0]->get(1).get_index(), 1);
+    CHECK_EQUAL(t0_lvs[0]->get(2).get_index(), 3);
+    CHECK_EQUAL(t0_lvs[1]->get(0).get_index(), 0);
+    CHECK_EQUAL(t0_lvs[1]->get(1).get_index(), 1);
+    CHECK_EQUAL(t0_lvs[1]->get(2).get_index(), 3);
+    CHECK_EQUAL(t0_lvs[2]->get(0).get_index(), 0);
+    CHECK_EQUAL(t0_lvs[2]->get(1).get_index(), 2);
+    CHECK_EQUAL(t0_lvs[2]->get(2).get_index(), 3);
+    CHECK_EQUAL(t0_lvs[3]->get(0).get_index(), 0);
+    CHECK_EQUAL(t0_lvs[3]->get(1).get_index(), 2);
+    CHECK_EQUAL(t0_lvs[3]->get(2).get_index(), 1);
+
+    CHECK_EQUAL(t0_subtables[0]->get_parent_row_index(), 0);
+    CHECK_EQUAL(t0_subtables[1]->get_parent_row_index(), 2);
+    CHECK_EQUAL(t0_subtables[2]->get_parent_row_index(), 1);
+    CHECK_EQUAL(t0_subtables[3]->get_parent_row_index(), 3);
+    CHECK_EQUAL(t0_subtables[0]->size(), 1);
+    CHECK_EQUAL(t0_subtables[1]->size(), 2);
+    CHECK_EQUAL(t0_subtables[2]->size(), 3);
+    CHECK_EQUAL(t0_subtables[3]->size(), 4);
+
+    CHECK_EQUAL(t0->get_backlink(0, *t1, 0, 0), 4);
+    CHECK_EQUAL(t0->get_backlink(1, *t1, 0, 0), 1);
+    CHECK_EQUAL(t0->get_backlink(2, *t1, 0, 0), 0);
+    CHECK_EQUAL(t0->get_backlink(3, *t1, 0, 0), 2);
+    CHECK_EQUAL(t0->get_backlink(4, *t1, 0, 0), 3);
+    CHECK_EQUAL(t0->get_backlink(0, *t1, 1, 0), 3);
+    CHECK_EQUAL(t0->get_backlink(1, *t1, 1, 0), 0);
+    CHECK_EQUAL(t0->get_backlink(2, *t1, 1, 0), 4);
+    CHECK_EQUAL(t0->get_backlink(3, *t1, 1, 0), 1);
+    CHECK_EQUAL(t0->get_backlink(4, *t1, 1, 0), 2);
+
+    CHECK(tv.is_row_attached(0));
+    CHECK(tv.is_row_attached(1));
+    CHECK(tv.is_row_attached(2));
+    CHECK(tv.is_row_attached(3));
+    CHECK_EQUAL(tv.get(0).get_index(), 0);
+    CHECK_EQUAL(tv.get(1).get_index(), 2);
+    CHECK_EQUAL(tv.get(2).get_index(), 1);
+    CHECK_EQUAL(tv.get(3).get_index(), 3);
+
+    CHECK_EQUAL(t1->get_link(0, 0), 2);
+    CHECK_EQUAL(t1->get_link(0, 1), 1);
+    CHECK_EQUAL(t1->get_link(0, 2), 3);
+    CHECK_EQUAL(t1->get_link(0, 3), 4);
+    CHECK_EQUAL(t1->get_link(0, 4), 0);
+
+    CHECK_EQUAL(t1_lvs[0]->get(0).get_index(), 1);
+    CHECK_EQUAL(t1_lvs[1]->get(0).get_index(), 3);
+    CHECK_EQUAL(t1_lvs[2]->get(0).get_index(), 4);
+    CHECK_EQUAL(t1_lvs[3]->get(0).get_index(), 0);
+    CHECK_EQUAL(t1_lvs[4]->get(0).get_index(), 2);
+
+    // swap adjacent, from > to
+    // 0, 2, 1, 3, 4
+    t0->move_row(3, 2);
+    // 0, 2, 3, 1, 4
+
+    CHECK_EQUAL(rows[0].get_index(), 0);
+    CHECK_EQUAL(rows[1].get_index(), 3);
+    CHECK_EQUAL(rows[2].get_index(), 1);
+    CHECK_EQUAL(rows[3].get_index(), 2);
+    CHECK_EQUAL(rows[4].get_index(), 4);
+
+    CHECK_EQUAL(rows[0].get_int(col_value), 0);
+    CHECK_EQUAL(rows[1].get_int(col_value), 1);
+    CHECK_EQUAL(rows[2].get_int(col_value), 2);
+    CHECK_EQUAL(rows[3].get_int(col_value), 3);
+
+    CHECK_EQUAL(rows[0].get_link(col_link), 0);
+    CHECK_EQUAL(rows[1].get_link(col_link), 3);
+    CHECK_EQUAL(rows[2].get_link(col_link), 1);
+    CHECK_EQUAL(rows[3].get_link(col_link), 2);
+
+    CHECK_EQUAL(t0_lvs[0]->get(0).get_index(), 3);
+    CHECK_EQUAL(t0_lvs[0]->get(1).get_index(), 1);
+    CHECK_EQUAL(t0_lvs[0]->get(2).get_index(), 2);
+    CHECK_EQUAL(t0_lvs[1]->get(0).get_index(), 0);
+    CHECK_EQUAL(t0_lvs[1]->get(1).get_index(), 1);
+    CHECK_EQUAL(t0_lvs[1]->get(2).get_index(), 2);
+    CHECK_EQUAL(t0_lvs[2]->get(0).get_index(), 0);
+    CHECK_EQUAL(t0_lvs[2]->get(1).get_index(), 3);
+    CHECK_EQUAL(t0_lvs[2]->get(2).get_index(), 2);
+    CHECK_EQUAL(t0_lvs[3]->get(0).get_index(), 0);
+    CHECK_EQUAL(t0_lvs[3]->get(1).get_index(), 3);
+    CHECK_EQUAL(t0_lvs[3]->get(2).get_index(), 1);
+
+    CHECK_EQUAL(t0_subtables[0]->get_parent_row_index(), 0);
+    CHECK_EQUAL(t0_subtables[1]->get_parent_row_index(), 3);
+    CHECK_EQUAL(t0_subtables[2]->get_parent_row_index(), 1);
+    CHECK_EQUAL(t0_subtables[3]->get_parent_row_index(), 2);
+    CHECK_EQUAL(t0_subtables[0]->size(), 1);
+    CHECK_EQUAL(t0_subtables[1]->size(), 2);
+    CHECK_EQUAL(t0_subtables[2]->size(), 3);
+    CHECK_EQUAL(t0_subtables[3]->size(), 4);
+
+    CHECK_EQUAL(t0->get_backlink(0, *t1, 0, 0), 4);
+    CHECK_EQUAL(t0->get_backlink(1, *t1, 0, 0), 1);
+    CHECK_EQUAL(t0->get_backlink(2, *t1, 0, 0), 2);
+    CHECK_EQUAL(t0->get_backlink(3, *t1, 0, 0), 0);
+    CHECK_EQUAL(t0->get_backlink(4, *t1, 0, 0), 3);
+    CHECK_EQUAL(t0->get_backlink(0, *t1, 1, 0), 3);
+    CHECK_EQUAL(t0->get_backlink(1, *t1, 1, 0), 0);
+    CHECK_EQUAL(t0->get_backlink(2, *t1, 1, 0), 1);
+    CHECK_EQUAL(t0->get_backlink(3, *t1, 1, 0), 4);
+    CHECK_EQUAL(t0->get_backlink(4, *t1, 1, 0), 2);
+
+    CHECK(tv.is_row_attached(0));
+    CHECK(tv.is_row_attached(1));
+    CHECK(tv.is_row_attached(2));
+    CHECK(tv.is_row_attached(3));
+    CHECK_EQUAL(tv.get(0).get_index(), 0);
+    CHECK_EQUAL(tv.get(1).get_index(), 3);
+    CHECK_EQUAL(tv.get(2).get_index(), 1);
+    CHECK_EQUAL(tv.get(3).get_index(), 2);
+    CHECK_EQUAL(tv.get(4).get_index(), 4);
+
+    CHECK_EQUAL(t1->get_link(0, 0), 3);
+    CHECK_EQUAL(t1->get_link(0, 1), 1);
+    CHECK_EQUAL(t1->get_link(0, 2), 2);
+    CHECK_EQUAL(t1->get_link(0, 3), 4);
+    CHECK_EQUAL(t1->get_link(0, 4), 0);
+
+    CHECK_EQUAL(t1_lvs[0]->get(0).get_index(), 1);
+    CHECK_EQUAL(t1_lvs[1]->get(0).get_index(), 2);
+    CHECK_EQUAL(t1_lvs[2]->get(0).get_index(), 4);
+    CHECK_EQUAL(t1_lvs[3]->get(0).get_index(), 0);
+    CHECK_EQUAL(t1_lvs[4]->get(0).get_index(), 3);
+
+    // non-adjacent, from < to
+    // 0, 2, 3, 1, 4
+    t0->move_row(1, 3);
+    // 0, 3, 1, 2, 4
+
+    CHECK_EQUAL(rows[0].get_index(), 0);
+    CHECK_EQUAL(rows[1].get_index(), 2);
+    CHECK_EQUAL(rows[2].get_index(), 3);
+    CHECK_EQUAL(rows[3].get_index(), 1);
+    CHECK_EQUAL(rows[4].get_index(), 4);
+
+    CHECK_EQUAL(rows[0].get_int(col_value), 0);
+    CHECK_EQUAL(rows[1].get_int(col_value), 1);
+    CHECK_EQUAL(rows[2].get_int(col_value), 2);
+    CHECK_EQUAL(rows[3].get_int(col_value), 3);
+    CHECK_EQUAL(rows[4].get_int(col_value), 4);
+
+    CHECK_EQUAL(rows[0].get_link(col_link), 0);
+    CHECK_EQUAL(rows[1].get_link(col_link), 2);
+    CHECK_EQUAL(rows[2].get_link(col_link), 3);
+    CHECK_EQUAL(rows[3].get_link(col_link), 1);
+    CHECK_EQUAL(rows[4].get_link(col_link), 4);
+
+    CHECK_EQUAL(t0_lvs[0]->get(0).get_index(), 2);
+    CHECK_EQUAL(t0_lvs[0]->get(1).get_index(), 3);
+    CHECK_EQUAL(t0_lvs[0]->get(2).get_index(), 1);
+    CHECK_EQUAL(t0_lvs[1]->get(0).get_index(), 0);
+    CHECK_EQUAL(t0_lvs[1]->get(1).get_index(), 3);
+    CHECK_EQUAL(t0_lvs[1]->get(2).get_index(), 1);
+    CHECK_EQUAL(t0_lvs[2]->get(0).get_index(), 0);
+    CHECK_EQUAL(t0_lvs[2]->get(1).get_index(), 2);
+    CHECK_EQUAL(t0_lvs[2]->get(2).get_index(), 1);
+    CHECK_EQUAL(t0_lvs[3]->get(0).get_index(), 0);
+    CHECK_EQUAL(t0_lvs[3]->get(1).get_index(), 2);
+    CHECK_EQUAL(t0_lvs[3]->get(2).get_index(), 3);
+
+    CHECK_EQUAL(t0_subtables[0]->get_parent_row_index(), 0);
+    CHECK_EQUAL(t0_subtables[1]->get_parent_row_index(), 2);
+    CHECK_EQUAL(t0_subtables[2]->get_parent_row_index(), 3);
+    CHECK_EQUAL(t0_subtables[3]->get_parent_row_index(), 1);
+    CHECK_EQUAL(t0_subtables[4]->get_parent_row_index(), 4);
+    CHECK_EQUAL(t0_subtables[0]->size(), 1);
+    CHECK_EQUAL(t0_subtables[1]->size(), 2);
+    CHECK_EQUAL(t0_subtables[2]->size(), 3);
+    CHECK_EQUAL(t0_subtables[3]->size(), 4);
+    CHECK_EQUAL(t0_subtables[4]->size(), 5);
+
+    CHECK_EQUAL(t0->get_backlink(0, *t1, 0, 0), 4);
+    CHECK_EQUAL(t0->get_backlink(1, *t1, 0, 0), 2);
+    CHECK_EQUAL(t0->get_backlink(2, *t1, 0, 0), 0);
+    CHECK_EQUAL(t0->get_backlink(3, *t1, 0, 0), 1);
+    CHECK_EQUAL(t0->get_backlink(4, *t1, 0, 0), 3);
+    CHECK_EQUAL(t0->get_backlink(0, *t1, 1, 0), 3);
+    CHECK_EQUAL(t0->get_backlink(1, *t1, 1, 0), 1);
+    CHECK_EQUAL(t0->get_backlink(2, *t1, 1, 0), 4);
+    CHECK_EQUAL(t0->get_backlink(3, *t1, 1, 0), 0);
+    CHECK_EQUAL(t0->get_backlink(4, *t1, 1, 0), 2);
+
+    CHECK(tv.is_row_attached(0));
+    CHECK(tv.is_row_attached(1));
+    CHECK(tv.is_row_attached(2));
+    CHECK(tv.is_row_attached(3));
+    CHECK(tv.is_row_attached(4));
+    CHECK_EQUAL(tv.get_int(0, 0), 0);
+    CHECK_EQUAL(tv.get_int(0, 1), 1);
+    CHECK_EQUAL(tv.get_int(0, 2), 2);
+    CHECK_EQUAL(tv.get_int(0, 3), 3);
+    CHECK_EQUAL(tv.get_int(0, 4), 4);
+    CHECK_EQUAL(tv.get(0).get_index(), 0);
+    CHECK_EQUAL(tv.get(1).get_index(), 2);
+    CHECK_EQUAL(tv.get(2).get_index(), 3);
+    CHECK_EQUAL(tv.get(3).get_index(), 1);
+    CHECK_EQUAL(tv.get(4).get_index(), 4);
+
+    CHECK_EQUAL(t1->get_link(0, 0), 2);
+    CHECK_EQUAL(t1->get_link(0, 1), 3);
+    CHECK_EQUAL(t1->get_link(0, 2), 1);
+    CHECK_EQUAL(t1->get_link(0, 3), 4);
+    CHECK_EQUAL(t1->get_link(0, 4), 0);
+
+    CHECK_EQUAL(t1_lvs[0]->get(0).get_index(), 3);
+    CHECK_EQUAL(t1_lvs[1]->get(0).get_index(), 1);
+    CHECK_EQUAL(t1_lvs[2]->get(0).get_index(), 4);
+    CHECK_EQUAL(t1_lvs[3]->get(0).get_index(), 0);
+    CHECK_EQUAL(t1_lvs[4]->get(0).get_index(), 2);
+
+    // non-adjacent, from > to
+    // 0, 3, 1, 2, 4
+    t0->move_row(3, 1);
+    // 0, 2, 3, 1, 4
+
+    CHECK_EQUAL(rows[0].get_index(), 0);
+    CHECK_EQUAL(rows[1].get_index(), 3);
+    CHECK_EQUAL(rows[2].get_index(), 1);
+    CHECK_EQUAL(rows[3].get_index(), 2);
+    CHECK_EQUAL(rows[4].get_index(), 4);
+
+    CHECK_EQUAL(rows[0].get_int(col_value), 0);
+    CHECK_EQUAL(rows[1].get_int(col_value), 1);
+    CHECK_EQUAL(rows[2].get_int(col_value), 2);
+    CHECK_EQUAL(rows[3].get_int(col_value), 3);
+
+    CHECK_EQUAL(rows[0].get_link(col_link), 0);
+    CHECK_EQUAL(rows[1].get_link(col_link), 3);
+    CHECK_EQUAL(rows[2].get_link(col_link), 1);
+    CHECK_EQUAL(rows[3].get_link(col_link), 2);
+
+    CHECK_EQUAL(t0_lvs[0]->get(0).get_index(), 3);
+    CHECK_EQUAL(t0_lvs[0]->get(1).get_index(), 1);
+    CHECK_EQUAL(t0_lvs[0]->get(2).get_index(), 2);
+    CHECK_EQUAL(t0_lvs[1]->get(0).get_index(), 0);
+    CHECK_EQUAL(t0_lvs[1]->get(1).get_index(), 1);
+    CHECK_EQUAL(t0_lvs[1]->get(2).get_index(), 2);
+    CHECK_EQUAL(t0_lvs[2]->get(0).get_index(), 0);
+    CHECK_EQUAL(t0_lvs[2]->get(1).get_index(), 3);
+    CHECK_EQUAL(t0_lvs[2]->get(2).get_index(), 2);
+    CHECK_EQUAL(t0_lvs[3]->get(0).get_index(), 0);
+    CHECK_EQUAL(t0_lvs[3]->get(1).get_index(), 3);
+    CHECK_EQUAL(t0_lvs[3]->get(2).get_index(), 1);
+
+    CHECK_EQUAL(t0_subtables[0]->get_parent_row_index(), 0);
+    CHECK_EQUAL(t0_subtables[1]->get_parent_row_index(), 3);
+    CHECK_EQUAL(t0_subtables[2]->get_parent_row_index(), 1);
+    CHECK_EQUAL(t0_subtables[3]->get_parent_row_index(), 2);
+    CHECK_EQUAL(t0_subtables[0]->size(), 1);
+    CHECK_EQUAL(t0_subtables[1]->size(), 2);
+    CHECK_EQUAL(t0_subtables[2]->size(), 3);
+    CHECK_EQUAL(t0_subtables[3]->size(), 4);
+
+    CHECK_EQUAL(t0->get_backlink(0, *t1, 0, 0), 4);
+    CHECK_EQUAL(t0->get_backlink(1, *t1, 0, 0), 1);
+    CHECK_EQUAL(t0->get_backlink(2, *t1, 0, 0), 2);
+    CHECK_EQUAL(t0->get_backlink(3, *t1, 0, 0), 0);
+    CHECK_EQUAL(t0->get_backlink(4, *t1, 0, 0), 3);
+    CHECK_EQUAL(t0->get_backlink(0, *t1, 1, 0), 3);
+    CHECK_EQUAL(t0->get_backlink(1, *t1, 1, 0), 0);
+    CHECK_EQUAL(t0->get_backlink(2, *t1, 1, 0), 1);
+    CHECK_EQUAL(t0->get_backlink(3, *t1, 1, 0), 4);
+    CHECK_EQUAL(t0->get_backlink(4, *t1, 1, 0), 2);
+
+    CHECK(tv.is_row_attached(0));
+    CHECK(tv.is_row_attached(1));
+    CHECK(tv.is_row_attached(2));
+    CHECK(tv.is_row_attached(3));
+    CHECK_EQUAL(tv.get(0).get_index(), 0);
+    CHECK_EQUAL(tv.get(1).get_index(), 3);
+    CHECK_EQUAL(tv.get(2).get_index(), 1);
+    CHECK_EQUAL(tv.get(3).get_index(), 2);
+    CHECK_EQUAL(tv.get(4).get_index(), 4);
+
+    CHECK_EQUAL(t1->get_link(0, 0), 3);
+    CHECK_EQUAL(t1->get_link(0, 1), 1);
+    CHECK_EQUAL(t1->get_link(0, 2), 2);
+    CHECK_EQUAL(t1->get_link(0, 3), 4);
+    CHECK_EQUAL(t1->get_link(0, 4), 0);
+
+    CHECK_EQUAL(t1_lvs[0]->get(0).get_index(), 1);
+    CHECK_EQUAL(t1_lvs[1]->get(0).get_index(), 2);
+    CHECK_EQUAL(t1_lvs[2]->get(0).get_index(), 4);
+    CHECK_EQUAL(t1_lvs[3]->get(0).get_index(), 0);
+    CHECK_EQUAL(t1_lvs[4]->get(0).get_index(), 3);
+}
+
+
 TEST(Table_MergeRows_Links)
 {
     Group g;
@@ -7578,6 +8456,7 @@ TEST(Table_DetachedAccessor)
     CHECK_LOGIC_ERROR(table->remove_search_index(0), LogicError::detached_accessor);
     CHECK_LOGIC_ERROR(table->merge_rows(0, 1), LogicError::detached_accessor);
     CHECK_LOGIC_ERROR(table->swap_rows(0, 1), LogicError::detached_accessor);
+    CHECK_LOGIC_ERROR(table->move_row(0, 1), LogicError::detached_accessor);
     CHECK_LOGIC_ERROR(table->set_string(1, 0, ""), LogicError::detached_accessor);
     CHECK_LOGIC_ERROR(table->set_string_unique(1, 0, ""), LogicError::detached_accessor);
     CHECK_LOGIC_ERROR(table->insert_substring(1, 0, 0, "x"), LogicError::detached_accessor);
@@ -7846,5 +8725,21 @@ TEST_TYPES(Table_ColumnSizeFromRef, std::true_type, std::false_type)
     check_column_sizes(10 * REALM_MAX_BPNODE_SIZE);
 }
 
+TEST(Table_KeyRow)
+{
+    Table table;
+    table.add_column(type_Int, "int");
+    table.add_column(type_String, "string");
+    table.add_search_index(0);
+
+    size_t ndx = table.add_row_with_key(0, 123);
+    table.set_string(1, ndx, "Hello, ");
+    table.add_row_with_key(0, 456);
+
+    size_t i = table.find_first_int(0, 123);
+    CHECK_EQUAL(i, 0);
+    i = table.find_first_int(0, 456);
+    CHECK_EQUAL(i, 1);
+}
 
 #endif // TEST_TABLE
